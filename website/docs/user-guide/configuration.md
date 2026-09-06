@@ -2002,6 +2002,22 @@ providers:
 
 Differences from `agent.service_tier`: the tier is always on for that provider (no `auto`/`cold` window), `/fast` does not toggle it, and Hermes does not validate the value — the gateway decides what it accepts and what it bills.
 
+#### Per-turn tier escalation (opt-in)
+
+`agent.service_tier_escalation` lets a turn that starts on a cheaper OpenRouter tier climb when the provider is slow. While streaming, Hermes measures time-to-first-token (TTFT) on each main-conversation request; when TTFT exceeds `ttft_threshold_seconds` on `consecutive_slow_requests` successful streams in a row, the agent climbs one tier (flex → default → priority) for the **rest of that turn**. The next user message starts again at the configured base (session pin > per-model overlay > global). Escalation overlays the wire tier at request time and never mutates canonical `agent.service_tier` / `request_overrides`.
+
+```yaml
+agent:
+  service_tier_escalation:
+    enabled: true                  # default: false
+    ttft_threshold_seconds: 8.0
+    consecutive_slow_requests: 1   # raise for a softer trigger
+```
+
+Escalation never fires while a session `/fast` pin is active, and never applies to cron jobs, batch runs, subagents, or background tasks (CLI `/bg`, gateway `/bg`, TUI background). Provider errors are not escalation input. Retried or interrupted requests don't count as slow observations, and a retry of the same logical request always runs on the tier that attempt started with. Provider fallback rebases the ladder onto the new model's base tier while keeping climbed rungs and the slow-streak.
+
+Known limitations (conservative under-escalation; do not treat as bugs): the non-streaming fallback path produces no observation; Codex streaming is not timed; length-continuation and compression/redirect restarts drop the in-flight sample. Escalation state is per-agent, never copied to delegated children, and never persisted to SessionDB. Escalations are logged at INFO (`agent.log`). The setting is picked up when an agent is constructed (new CLI/TUI session, new gateway agent). Cached gateway agents keep the construction-time value.
+
 ## Tool-Use Enforcement
 
 Some models occasionally describe intended actions as text instead of making tool calls ("I would run the tests..." instead of actually calling the terminal). Tool-use enforcement injects system prompt guidance that steers the model back to actually calling tools.

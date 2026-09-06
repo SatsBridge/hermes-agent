@@ -111,6 +111,16 @@ def begin_turn(agent: Any, conversation_history: Any) -> None:
     agent._fast_until = time.monotonic() + max(window, 0.0)
 
 
+def _apply_escalation_overlay(agent: Any, overrides: dict[str, Any]) -> dict[str, Any]:
+    """Last-step TTFT ladder overlay. No-op when escalation is disabled or gated."""
+    try:
+        from agent.service_tier_escalation import apply_escalation_to_overrides
+
+        return apply_escalation_to_overrides(agent, overrides)
+    except Exception:
+        return overrides
+
+
 def effective_request_overrides(agent: Any) -> dict[str, Any]:
     """``agent.request_overrides`` plus the fast override while the window is open, minus
     ``speed`` for a model this session learned has no fast capacity."""
