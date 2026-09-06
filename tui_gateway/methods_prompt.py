@@ -1256,9 +1256,11 @@ def _(rid, params: dict) -> dict:
         result = AIAgent(
             **_ephemeral_preview_agent_kwargs(session["agent"], task_id),
             **_preview_restart_callbacks(parent, task_id),
-        ).run_conversation(
+        )
+        result._block_service_tier_escalation = True
+        outcome = result.run_conversation(
             user_message=prompt, task_id=task_id, conversation_history=parent_history or None)
-        return _final_response_text(result)
+        return _final_response_text(outcome)
 
     def cleanup():
         with contextlib.suppress(Exception):

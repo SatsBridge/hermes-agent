@@ -2209,6 +2209,8 @@ def init_agent(
     # * Surfaces that apply a session /fast set this True after construction. Default-off so
     # delegated children never inherit a parent session pin.
     agent._service_tier_session_pinned = False
+    # * Batch / background constructors set this True so an enabled config cannot climb.
+    agent._block_service_tier_escalation = False
     agent.prefill_messages = prefill_messages or []  # Prefilled conversation turns
     agent._force_ascii_payload = False
     # Routes that rejected image content / named reasoning keys; build_api_request strips those from wire copies only.
@@ -2244,6 +2246,14 @@ def init_agent(
             type(exc).__name__,
         )
         _agent_cfg = {}
+
+    from agent.service_tier_escalation import bind_service_tier_escalation
+
+    _esc_raw = service_tier_escalation
+    if _esc_raw is None and isinstance(_agent_cfg, dict):
+        _agent_section = _agent_cfg.get("agent")
+        _esc_raw = _agent_section if isinstance(_agent_section, dict) else None
+    bind_service_tier_escalation(agent, _esc_raw)
 
     _apply_display_config(agent, _agent_cfg, platform)
     _init_memory(agent, _agent_cfg, skip_memory, platform, memory_manager=memory_manager)
