@@ -251,9 +251,24 @@ class GatewayTurnPrepareMixin:
             )
         except Exception:
             overrides = None
+        mapped = overrides or {}
         # Fast-mode keys (service_tier / speed) are top-level and don't collide with extra_body.
-        route["request_overrides"] = _deep_merge_request_overrides(base_request_overrides, overrides or {})
+        route["request_overrides"] = _deep_merge_request_overrides(base_request_overrides, mapped)
+        # * Only keys the framework added this turn — user request_overrides stay unmarked.
+        from agent.fast_mode import TIER_WIRE_KEYS
+
+        route["framework_baked_tier_keys"] = {
+            key: mapped[key] for key in TIER_WIRE_KEYS if key in mapped
+        }
         return route
+
+    def _apply_background_agent_tier_provenance(self, agent, snapshot):
+        """Apply a pre-await {pinned, framework_baked_tier_keys} snapshot."""
+        from agent.fast_mode import set_framework_baked_tier_keys
+
+        snap = snapshot or {}
+        agent._service_tier_session_pinned = bool(snap.get("pinned"))
+        set_framework_baked_tier_keys(agent, snap.get("framework_baked_tier_keys"))
 
     def _sync_session_model_from_agent(self, session_id: str, agent: Any) -> None:
         """Persist the runtime model/provider a gateway turn actually used (provider fallback can

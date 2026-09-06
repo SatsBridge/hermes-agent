@@ -63,8 +63,18 @@ class GatewayBackgroundMixin:
             max_iterations = _current_max_iterations()
             reasoning_config = self._resolve_session_reasoning_config(source=source, model=model)
             self._reasoning_config = reasoning_config
-            self._service_tier = self._resolve_session_service_tier(source=source)
+            # * Value + pin from one pre-await snapshot. ``self._service_tier`` is
+            # shared across sessions; do not re-read it after vision enrichment.
+            session_key = self._session_key_for_source(source)
+            service_tier = self._resolve_session_service_tier(source=source)
+            pinned = bool(self._session_service_tier_is_pinned(session_key))
+            self._service_tier = service_tier
             turn_route = self._resolve_turn_agent_config(prompt, model, runtime_kwargs)
+            tier_snapshot = {
+                "service_tier": service_tier,
+                "pinned": pinned,
+                "framework_baked_tier_keys": turn_route.get("framework_baked_tier_keys"),
+            }
 
             # Enrich the prompt with image descriptions (same as the main flow).
             enriched_prompt = prompt
@@ -92,7 +102,7 @@ class GatewayBackgroundMixin:
                     enabled_toolsets=enabled_toolsets,
                     disabled_toolsets=disabled_toolsets,
                     reasoning_config=reasoning_config,
-                    service_tier=self._service_tier,
+                    service_tier=tier_snapshot["service_tier"],
                     request_overrides=turn_route.get("request_overrides"),
                     providers_allowed=pr.get("only"),
                     providers_ignored=pr.get("ignore"),
@@ -110,6 +120,7 @@ class GatewayBackgroundMixin:
                     # See #60955.
                     fallback_model=self._refresh_fallback_model(),
                 )
+                self._apply_background_agent_tier_provenance(agent, tier_snapshot)
                 agent._block_service_tier_escalation = True
                 try:
                     return agent.run_conversation(user_message=enriched_prompt, task_id=task_id)

@@ -1,5 +1,6 @@
 """Tests for gateway /fast support and Priority Processing routing."""
 
+import asyncio
 import sys
 import threading
 import types

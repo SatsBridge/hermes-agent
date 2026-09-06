@@ -12,7 +12,7 @@ from agent.error_classifier import FailoverReason
 from run_agent import AIAgent
 
 
-def _make_agent(fallback_model=None):
+def _make_agent(fallback_model=None, **kwargs):
     """Create a minimal AIAgent with optional fallback config."""
     with (
         patch("model_tools.get_tool_definitions", return_value=[]),
@@ -26,6 +26,7 @@ def _make_agent(fallback_model=None):
             skip_context_files=True,
             skip_memory=True,
             fallback_model=fallback_model,
+            **kwargs,
         )
         agent.client = MagicMock()
         return agent

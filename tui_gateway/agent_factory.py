@@ -176,7 +176,14 @@ def _stored_session_runtime_overrides(row: dict | None) -> dict:
         overrides["provider_override"] = provider
     if isinstance(reasoning_config, dict):
         overrides["reasoning_config_override"] = reasoning_config
-    if service_tier:  # None = "inherit the profile" at _make_agent; "" = real override "no priority tier"
+    # * Only an explicit session /fast pin is restored as an override.
+    # Unpinned rows inherit profile resolution (per-model > global).
+    # ``normal`` without the flag is a legacy explicit pin (never written
+    # for unpinned inherit).
+    if service_tier and (
+        model_config.get("service_tier_session_pinned")
+        or service_tier.lower() == "normal"
+    ):
         overrides["service_tier_override"] = "" if service_tier.lower() == "normal" else service_tier
     return overrides
 
@@ -200,17 +207,24 @@ def _runtime_model_config(agent, existing: dict | None = None) -> dict:
     from hermes_cli.runtime_provider_custom import session_provider_identity
     provider = session_provider_identity(attr("provider"), attr("requested_provider"), base_url, model)
     reasoning_config = getattr(agent, "reasoning_config", None)
+    pinned = getattr(agent, "_service_tier_session_pinned", False) is True
     live = {
         "model": model, "provider": provider, "base_url": base_url, "api_mode": attr("api_mode"),
         # An empty dict is still a real (present) reasoning config.
         "reasoning_config": reasoning_config if isinstance(reasoning_config, dict) else None,
-        "service_tier": getattr(agent, "service_tier", None),
+        # * Persist the wire value only for an explicit session pin; unpinned
+        # agents inherit per-model/global resolution on resume.
+        "service_tier": (getattr(agent, "service_tier", None) or "normal") if pinned else None,
     }
     for key, value in live.items():
         if value or isinstance(value, dict):
             config[key] = value
         else:
             config.pop(key, None)
+    if pinned:
+        config["service_tier_session_pinned"] = True
+    else:
+        config.pop("service_tier_session_pinned", None)
     return config
 
 

@@ -79,7 +79,8 @@ class CLIChatTurnMixin:
             self._spinner_text = initializing
         try:
             if not self._init_agent(model_override=turn_route["model"], runtime_override=turn_route["runtime"],
-                                    request_overrides=turn_route.get("request_overrides")):
+                                    request_overrides=turn_route.get("request_overrides"),
+                                    framework_baked_tier_keys=turn_route.get("framework_baked_tier_keys")):
                 return None
         finally:
             if initializing and getattr(self, "_spinner_text", "") == initializing:

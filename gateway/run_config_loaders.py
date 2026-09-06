@@ -308,19 +308,6 @@ class GatewayConfigLoadersMixin:
         if getattr(policy, "source", None) not in DAYBREAK_LABELS:
             return False
         return cfg_get(_load_gateway_config(), "agent", "daybreak") is True
-
-    @classmethod
-    def _load_service_tier_escalation(cls):
-        """``agent.service_tier_escalation``; missing/invalid → disabled defaults."""
-        from gateway.run import _load_gateway_runtime_config
-        from hermes_constants import resolve_service_tier_escalation_config
-
-        cfg = _load_gateway_runtime_config() or {}
-        agent_cfg = cfg.get("agent") if isinstance(cfg, dict) else {}
-        return resolve_service_tier_escalation_config(
-            agent_cfg if isinstance(agent_cfg, dict) else {},
-        )
-
     @staticmethod
     def _load_show_reasoning() -> bool:
         """``display.show_reasoning`` toggle."""
