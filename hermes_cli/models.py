@@ -1289,6 +1289,38 @@ def resolve_fast_mode_overrides(
     return {"speed": "fast"} if _is_anthropic_fast_model(model_id) else {"service_tier": "priority"}
 
 
+def resolve_service_tier_overrides(
+    model_id: Optional[str],
+    service_tier: Optional[str],
+    *,
+    provider: Optional[str] = None,
+    base_url: Optional[str] = None,
+) -> dict[str, Any] | None:
+    """Return request overrides for a normalized service-tier preference.
+
+    OpenRouter accepts both ``flex`` and ``priority`` as top-level request
+    fields for every catalog model. Elsewhere, ``flex`` is warned and ignored;
+    ``priority`` retains the existing model-aware /fast mapping: OpenAI models
+    receive ``service_tier`` while supported Anthropic models receive ``speed``.
+    """
+    from hermes_constants import parse_service_tier
+
+    tier = parse_service_tier(service_tier)
+    if tier == "flex":
+        if _is_openrouter_service_tier_route(provider, base_url):
+            return {"service_tier": "flex"}
+        logger.warning(
+            "service_tier 'flex' is OpenRouter-only; ignoring for %s",
+            provider or base_url or "this route",
+        )
+        return None
+    if tier == "priority" and _is_openrouter_service_tier_route(provider, base_url):
+        return {"service_tier": "priority"}
+    if tier == "priority":
+        return resolve_fast_mode_overrides(model_id, provider=provider, base_url=base_url)
+    return None
+
+
 def _model_dedup_key(model_id: str) -> str:
     """Case-insensitive dedup key folded through the picker-search alias table, so a bare live wire
     id and its curated public slug (Kimi ``k3`` / ``kimi-k3``) don't both survive a merge."""

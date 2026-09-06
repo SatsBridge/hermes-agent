@@ -151,6 +151,36 @@ def _scope_outcome(explicit_global: bool, saved: bool) -> str:
     return _t("shared.scope_session")
 
 
+def _effective_service_tier_for_fast_status(shell):
+    """Resolve the tier CLI /fast status should display.
+
+    Session /fast pin wins. Unpinned shells re-resolve from config so a
+    per-model overlay (e.g. flex on openai/gpt-5) is visible even when
+    ``shell.service_tier`` still holds the global default.
+    """
+    if getattr(shell, "_service_tier_session_pinned", False) is True:
+        return getattr(shell, "service_tier", None)
+    try:
+        from hermes_cli.config import load_config_readonly
+        from hermes_constants import resolve_service_tier_for_model
+
+        cfg = load_config_readonly() or {}
+        agent_cfg = cfg.get("agent") if isinstance(cfg.get("agent"), dict) else {}
+        model = getattr(getattr(shell, "agent", None), "model", None) or getattr(shell, "model", None)
+        return resolve_service_tier_for_model(
+            agent_cfg, str(model or ""), fallback=getattr(shell, "service_tier", None),
+        )
+    except Exception:
+        return getattr(shell, "service_tier", None)
+
+
+def _fast_status_label(shell) -> str:
+    """Map effective service_tier to CLI /fast status: fast / flex / normal / auto / cold."""
+    from hermes_constants import service_tier_status_label
+
+    return service_tier_status_label(_effective_service_tier_for_fast_status(shell))
+
+
 def _toggle_target(arg: str, current: bool):
     """Resolve a ``/x [on|off|status]`` argument: "status" for a status query, a bool for the
     new state (bare arg toggles), or None when the argument is unrecognized."""

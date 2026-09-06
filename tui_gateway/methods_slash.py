@@ -448,6 +448,27 @@ _FAST_TIERS = {"fast": "priority", "on": "priority", "normal": None, "off": None
 
 
 def _mirror_fast(sid, session, agent, arg) -> None:
+    tokens = arg.lower().split()
+    persist_global = "--global" in tokens
+    words = [t for t in tokens if t not in ("--global", "--session")]
+    if not words:
+        return
+    word = words[0]
+    if word not in _FAST_TIERS:
+        return
+    tier = _FAST_TIERS[word]
+    saved = False
+    if persist_global:
+        try:
+            _write_config_key("agent.service_tier", _FAST_SAVED[tier])
+            saved = True
+        except Exception:
+            saved = False
+    # * Successful --global persist unpins so per-model overlays apply again (CLI parity).
+    if persist_global and saved:
+        session.pop("create_service_tier_override", None)
+    else:
+        session["create_service_tier_override"] = "" if tier is None else tier
     if agent:
         from hermes_cli.cli_commands_mixin import _split_scope_flags
         mode, global_scope = _split_scope_flags(arg)

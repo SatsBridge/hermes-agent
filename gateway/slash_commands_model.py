@@ -25,6 +25,8 @@ logger = logging.getLogger("gateway.run")  # log-record parity with gateway/run.
 _FAST_SELECTIONS = {
     "fast": ("priority", "fast", "gateway.fast.label_fast"),
     "on": ("priority", "fast", "gateway.fast.label_fast"),
+    "priority": ("priority", "fast", "gateway.fast.label_fast"),
+    "flex": ("flex", "flex", None),
     "normal": (None, "normal", "gateway.fast.label_normal"),
     "off": (None, "normal", "gateway.fast.label_normal"),
     "auto": ("auto", "auto", None),
@@ -1090,3 +1092,25 @@ class GatewayModelCommandsMixin:
         if picker_sent:
             return None  # Picker sent — adapter handles the response
         return t("gateway.fast.status", mode=status)
+
+    def _session_effective_fast_route(self, session_key: str) -> tuple[str, Any, Any]:
+        """Session-effective (model, provider, base_url) for /fast gating and status."""
+        from gateway.run import _load_gateway_config, _resolve_gateway_model
+
+        override = (getattr(self, "_session_model_overrides", {}) or {}).get(session_key) or {}
+        model = str(override.get("model") or "")
+        if not model:
+            state = self._peek_session_state(session_key) if session_key else None
+            last = getattr(getattr(state, "conversation", None), "last_resolved_model", None) if state else None
+            model = str(last or "")
+        if not model:
+            model = str(_resolve_gateway_model(_load_gateway_config()) or "")
+        provider = override.get("provider")
+        base_url = override.get("base_url")
+        if not provider:
+            cfg = _load_gateway_config() or {}
+            model_cfg = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
+            if isinstance(model_cfg, dict):
+                provider = provider or model_cfg.get("provider")
+                base_url = base_url or model_cfg.get("base_url")
+        return model, provider, base_url

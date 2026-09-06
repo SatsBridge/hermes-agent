@@ -214,7 +214,7 @@ class GatewayTurnPrepareMixin:
 
     def _resolve_turn_agent_config(self, user_message: str, model: str, runtime_kwargs: dict, *,
                                    tier: Any = _TIER_FROM_RUNNER) -> dict:
-        """Effective model/runtime config for one turn. With `/fast` priority on, fast-mode
+        """Effective model/runtime config for one turn. Static ``priority``/``flex``
         ``request_overrides`` are deep-merged OVER the per-provider ones so both reach the model.
         ``tier`` defaults to the runner's per-turn ``_service_tier``; an off-turn builder (a cold
         ``/review``) passes the session's own instead of writing that shared slot."""

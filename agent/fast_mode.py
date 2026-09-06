@@ -12,6 +12,7 @@ new speed.
 
 from __future__ import annotations
 
+import contextlib
 import time
 from typing import Any
 
@@ -57,9 +58,44 @@ def service_tier_word(tier: Any) -> str:
     return {"priority": "fast", None: "normal", "": "normal"}.get(tier, tier)
 
 
+def _agent_route(agent: Any) -> tuple[Any, Any, Any]:
+    """``(model, provider, base_url)`` for the current request, Anthropic Messages URL included."""
+    base_url = getattr(agent, "base_url", None)
+    if getattr(agent, "api_mode", None) == "anthropic_messages":
+        base_url = getattr(agent, "_anthropic_base_url", None) or base_url
+    return getattr(agent, "model", None), getattr(agent, "provider", None), base_url
+
+
+def logical_service_tier(agent: Any) -> str | None:
+    """Canonical tier for this request: session pin, else config (per-model then global).
+
+    Unpinned agents re-read config so ``/model``, fallback, cron, and delegated
+    children pick the overlay for *their* model without per-surface resync.
+    A session pin (including explicit ``None`` = normal) wins and is not
+    inherited by children — the flag lives on this agent object only.
+    """
+    from hermes_constants import parse_service_tier, resolve_service_tier_for_model
+
+    if getattr(agent, "_service_tier_session_pinned", False) is True:
+        return parse_service_tier(getattr(agent, "service_tier", None))
+    agent_cfg: dict = {}
+    with contextlib.suppress(Exception):
+        from hermes_cli.config import load_config_readonly
+
+        cfg = load_config_readonly() or {}
+        raw = cfg.get("agent")
+        if isinstance(raw, dict):
+            agent_cfg = raw
+    return resolve_service_tier_for_model(
+        agent_cfg,
+        str(getattr(agent, "model", "") or ""),
+        fallback=getattr(agent, "service_tier", None),
+    )
+
+
 def begin_turn(agent: Any, conversation_history: Any) -> None:
     """Open (or refuse) the fast window at a user-turn boundary."""
-    mode = getattr(agent, "service_tier", None)
+    mode = logical_service_tier(agent)
     agent._fast_until = 0.0
     if mode not in BOUNDED_MODES:
         return
