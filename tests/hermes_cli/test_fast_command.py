@@ -164,6 +164,7 @@ class TestFastModeRouting(unittest.TestCase):
         assert route["runtime"]["api_mode"] == "chat_completions"
         # But request_overrides should be set
         assert route["request_overrides"] == {"service_tier": "priority"}
+        assert route["framework_baked_tier_keys"] == {"service_tier": "priority"}
 
         # OpenRouter catalog models may carry service_tier.
         stub.base_url = "https://openrouter.ai/api/v1"
@@ -191,6 +192,7 @@ class TestFastModeRouting(unittest.TestCase):
 
         assert route["runtime"]["provider"] == "openrouter"
         assert route.get("request_overrides") == {"service_tier": "priority"}
+        assert route.get("framework_baked_tier_keys") == {"service_tier": "priority"}
 
 class TestAnthropicFastMode(unittest.TestCase):
     """Verify Anthropic Fast Mode model support and override resolution."""
@@ -268,6 +270,7 @@ class TestAnthropicFastMode(unittest.TestCase):
 
         assert route["runtime"]["provider"] == "anthropic"
         assert route["request_overrides"] == {"speed": "fast"}
+        assert route["framework_baked_tier_keys"] == {"speed": "fast"}
 
 class TestAnthropicFastModeAdapter(unittest.TestCase):
     """Verify build_anthropic_kwargs handles fast_mode parameter."""

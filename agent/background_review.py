@@ -265,6 +265,17 @@ def _resolve_review_runtime(agent: Any, task_cfg: Optional[dict[str, Any]] = Non
     if not (task_provider and task_provider != "auto" and task_model) or (
         task_provider == (agent.provider or "") and task_model == (agent.model or "")  # same as parent
     ):
+        from hermes_cli.models import apply_aux_service_tier_overrides
+
+        parent["request_overrides"] = apply_aux_service_tier_overrides(
+            parent["request_overrides"],
+            task,
+            model=parent.get("model"),
+            provider=parent.get("provider"),
+            base_url=parent.get("base_url"),
+            task="background_review",
+        )
+        parent["_aux_slot"] = task
         return parent
     try:
         from hermes_cli.runtime_provider import resolve_runtime_provider
@@ -272,12 +283,24 @@ def _resolve_review_runtime(agent: Any, task_cfg: Optional[dict[str, Any]] = Non
             requested=task_provider, target_model=task_model,
             explicit_api_key=task_api_key, explicit_base_url=task_base_url,
         )
-        return {
+        from hermes_cli.models import apply_aux_service_tier_overrides
+
+        routed = {
             "provider": rp.get("provider") or task_provider, "model": rp.get("model") or task_model,
             **{key: rp.get(key) for key in ("api_key", "base_url", "api_mode", "credential_pool", "command")},
             "request_overrides": dict(rp.get("request_overrides") or {}),
             "args": list(rp.get("args") or []), "routed": True,
         }
+        routed["request_overrides"] = apply_aux_service_tier_overrides(
+            routed["request_overrides"],
+            task,
+            model=routed.get("model"),
+            provider=routed.get("provider"),
+            base_url=routed.get("base_url"),
+            task="background_review",
+        )
+        routed["_aux_slot"] = task
+        return routed
     except Exception as e:
         _warn_review_routing_fallback(agent, task_provider, task_model, e)
         return parent

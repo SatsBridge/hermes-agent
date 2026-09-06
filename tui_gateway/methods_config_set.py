@@ -225,6 +225,9 @@ def _set_fast(rid, params, key, value, session):
                              if k not in ("service_tier", "speed")}
         agent.request_overrides = {**current_overrides, **(overrides or {})}
         agent._service_tier_session_pinned = session is not None
+        from agent.fast_mode import set_framework_baked_tier_keys
+
+        set_framework_baked_tier_keys(agent, overrides)
         _persist_live_session_runtime(session)
         _emit_session_info(params.get("session_id", ""), session)
     return _kv(rid, key, nv)

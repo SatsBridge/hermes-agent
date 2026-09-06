@@ -403,6 +403,7 @@ def _background_agent_kwargs(agent, task_id: str) -> dict:
     else:
         fallback = (agent._fallback_model if hasattr(agent, "_fallback_model")
                     else _load_fallback_model())
+    snap = snap if snap is not None else _background_tier_snapshot(agent)
     # Detached tasks declare platform="tui" (no UI sid for renderer-routed events), so resolve
     # toolsets against it — never GUI schema they can't use.
     return {
@@ -424,8 +425,17 @@ def _background_agent_kwargs(agent, task_id: str) -> dict:
         "side_agent": True}
 
 
-def _ephemeral_preview_agent_kwargs(agent, task_id: str) -> dict:
-    return {**_background_agent_kwargs(agent, task_id),
+def _apply_background_tier_provenance(bg_agent, parent, snap=None) -> None:
+    """CLI /bg parity: inherit the session pin and mark copied framework keys."""
+    from agent.fast_mode import set_framework_baked_tier_keys
+
+    snap = snap if snap is not None else _background_tier_snapshot(parent)
+    bg_agent._service_tier_session_pinned = bool(snap.get("pinned"))
+    set_framework_baked_tier_keys(bg_agent, snap.get("framework_baked_tier_keys"))
+
+
+def _ephemeral_preview_agent_kwargs(agent, task_id: str, snap=None) -> dict:
+    return {**_background_agent_kwargs(agent, task_id, snap),
             "enabled_toolsets": ["terminal", "file"], "session_db": None, "skip_memory": True}
 
 
@@ -606,6 +616,8 @@ def _reset_session_agent(sid: str, session: dict) -> dict:
         # /new is a full conversation boundary: session-scoped runtime overrides (/model,
         # /reasoning, /fast) do NOT carry forward and the pins are cleared so a rebuild can't
         # resurrect them. Global process state is never touched (see _apply_model_switch).
+        # * Rebuilds a new agent — unlike CLI /new there is no reused
+        # ``_primary_runtime`` snapshot that could revive a baked tier.
         for k in ("model_override", "create_reasoning_override", "create_service_tier_override", "one_turn_model_restore"):
             session.pop(k, None)
         new_agent = _rebuild_session_agent(
