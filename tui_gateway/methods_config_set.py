@@ -224,6 +224,7 @@ def _set_fast(rid, params, key, value, session):
         current_overrides = {k: v for k, v in (getattr(agent, "request_overrides", {}) or {}).items()
                              if k not in ("service_tier", "speed")}
         agent.request_overrides = {**current_overrides, **(overrides or {})}
+        agent._service_tier_session_pinned = session is not None
         _persist_live_session_runtime(session)
         _emit_session_info(params.get("session_id", ""), session)
     return _kv(rid, key, nv)

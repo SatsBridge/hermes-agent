@@ -306,7 +306,7 @@ class GatewayTurnMixin:
         return model, runtime_kwargs
 
     def _resolve_turn_agent_config(self, user_message: str, model: str, runtime_kwargs: dict) -> dict:
-        """Effective model/runtime config for one turn. With `/fast` priority on, fast-mode
+        """Effective model/runtime config for one turn. Static ``priority``/``flex``
         ``request_overrides`` are deep-merged OVER the per-provider ones so both reach the model."""
         from gateway.run import _deep_merge_request_overrides
         from agent.fast_mode import STATIC_TIERS

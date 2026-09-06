@@ -2419,6 +2419,10 @@ def init_agent(
     # reasoning_content echo opt-in; switch_model / fallback / restore keep it in sync.
     agent._reasoning_echo_flag = agent._read_reasoning_echo_from_config()
     agent.request_overrides = dict(request_overrides or {})
+    agent.service_tier = parse_service_tier(getattr(agent, "service_tier", None))
+    # * Surfaces that apply a session /fast set this True after construction. Default-off so
+    # delegated children never inherit a parent session pin.
+    agent._service_tier_session_pinned = False
     agent.prefill_messages = prefill_messages or []  # Prefilled conversation turns
     agent._force_ascii_payload = False
     # Routes that rejected image content / named reasoning keys; build_api_request strips those from wire copies only.

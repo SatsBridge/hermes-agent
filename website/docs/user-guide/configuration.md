@@ -1962,6 +1962,10 @@ Fast mode selects a provider tier: OpenAI [Priority Processing](https://openai.c
 agent:
   service_tier: ""          # "" / normal | fast | priority | flex | ultrafast | auto | cold
   fast_auto_seconds: 60     # window for auto / cold
+  # Per-model overlay (spelling-tolerant). Request-time; no /model resync needed.
+  # service_tier_overrides:
+  #   "openai/gpt-5": "flex"
+  service_tier_overrides: {}
 ```
 
 | Mode | When fast params are sent | Use it for |
