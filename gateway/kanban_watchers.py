@@ -237,10 +237,17 @@ class GatewayKanbanWatchersMixin:
             logger.warning("kanban dispatcher: kanban_db not importable; dispatcher disabled")
             return None
 
-        # Single-dispatcher backstop (see _acquire_singleton_lock). The lock
-        # lives at the machine-global kanban root, so it serialises ALL gateways.
+        # Single-dispatcher backstop (see _acquire_singleton_lock). Keep the
+        # legacy global lock unless this home declares a validated identity.
         self._kanban_dispatcher_lock_handle = None
-        _lock_path = _kb.kanban_home() / "kanban" / ".dispatcher.lock"
+        from hermes_cli.kanban_db_dispatch import _dispatch_identity
+        from hermes_cli.profiles import normalize_profile_name
+
+        _identity = _dispatch_identity(normalize_profile_name)
+        _lock_name = f".dispatcher.{_identity}.lock" if _identity else ".dispatcher.lock"
+        _lock_path = _kb.kanban_home() / "kanban" / _lock_name
+        if _identity:
+            logger.info("kanban dispatcher: board identity=%r (lane lock %s)", _identity, _lock_name)
         _lock_handle, _lock_state = _acquire_singleton_lock(_lock_path)
         if _lock_state == "contended":
             logger.info("kanban dispatcher: another gateway already holds the dispatcher "
