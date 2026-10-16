@@ -83,7 +83,7 @@ class TestReconcileOrphanedRunning:
     def test_null_claim_expires_orphan_requeued(self, conn):
         """running + claim_lock set but claim_expires NULL is also invisible
         to release_stale_claims — reconciliation must catch it."""
-        host = kb._claimer_id().split(":", 1)[0]
+        host = kb._claimer_id().rsplit(":", 1)[0]
         tid = kb.create_task(conn, title="half-claim", assignee="w")
         _orphan_running(conn, tid, claim_lock=f"{host}:dead")
 

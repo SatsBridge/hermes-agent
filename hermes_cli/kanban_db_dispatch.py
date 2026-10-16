@@ -853,15 +853,7 @@ def detect_stale_running(
 
 
 def reconcile_orphaned_running(conn: sqlite3.Connection) -> list[str]:
-    """Requeue ``running`` cards with broken claim bookkeeping; returns their ids.
-
-    A task ``running`` with NULL ``claim_lock``/``claim_expires`` (crash
-    mid-claim, manual SQL, DB restore) is a zombie forever: ``release_stale_claims``
-    needs ``claim_expires``, ``detect_crashed_workers`` needs a host-local lock +
-    pid, ``detect_stale_running`` is off by default. Orphans go back to ``ready``
-    with a comment, leaked run closed, ``reconciled`` event; a row with a live
-    host-local PID is deferred so no duplicate spawns beside it.
-    """
+    """Requeue orphaned running tasks without probing foreign/legacy PIDs."""
     now = int(time.time())
     reconciled: list[str] = []
     rows = conn.execute(
@@ -875,6 +867,9 @@ def reconcile_orphaned_running(conn: sqlite3.Connection) -> list[str]:
             continue
         tid = row["id"]
         pid = row["worker_pid"]
+        lock = row["claim_lock"] or ""
+        if pid and lock and not lock.startswith(_kb._host_prefix()):  # Foreign/legacy PIDs are not probeable here.
+            continue
         if pid and _worker_alive(pid, _kb._row_get(row, "worker_started_at")):
             # Never requeue beside a live process. Retry next tick.
             _kb._log.debug(
@@ -1168,9 +1163,10 @@ def _reclaim_dead_workers(conn: sqlite3.Connection, board: Optional[str] = None)
     sweep = _CrashSweep()
     with _kb.write_txn(conn):
         rows = conn.execute(
-            "SELECT id, worker_pid, worker_started_at, claim_lock, started_at, assignee "
-            "FROM tasks "
-            "WHERE status = 'running' AND worker_pid IS NOT NULL"
+            "SELECT t.id, t.worker_pid, t.worker_started_at, t.claim_lock, t.started_at, "
+            "       r.started_at AS run_started_at, t.assignee "
+            "FROM tasks t LEFT JOIN task_runs r ON r.id = t.current_run_id "
+            "WHERE t.status = 'running' AND t.worker_pid IS NOT NULL"
         ).fetchall()
         host_prefix = _kb._host_prefix()
         from hermes_cli.kanban_owner_recovery import apply_attempt_note, managed_run_exit_code, owner_reclaim_blocked
@@ -1178,9 +1174,10 @@ def _reclaim_dead_workers(conn: sqlite3.Connection, board: Optional[str] = None)
             lock = row["claim_lock"] or ""
             if not lock.startswith(host_prefix):
                 continue
-            # Launch-window grace so a freshly-spawned worker isn't reclaimed
-            # before its PID is visible on /proc.
-            started_at = _kb._to_epoch(_kb._row_get(row, "started_at"))
+            # Grace uses the active run; tasks.started_at remains first-start metrics.
+            started_at = _kb._to_epoch(_kb._row_get(row, "run_started_at"))
+            if started_at is None:
+                started_at = _kb._to_epoch(_kb._row_get(row, "started_at"))
             if started_at is not None and time.time() - started_at < _kb._resolve_crash_grace_seconds():
                 continue
             if _worker_alive(row["worker_pid"], _kb._row_get(row, "worker_started_at")):

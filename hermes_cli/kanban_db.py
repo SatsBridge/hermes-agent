@@ -991,21 +991,6 @@ def _new_task_id() -> str:
     return "t_" + secrets.token_hex(4)
 
 
-def _claimer_id() -> str:
-    """Return a ``host:pid`` string that identifies this claimer."""
-    import socket
-    try:
-        host = socket.gethostname() or "unknown"
-    except Exception:
-        host = "unknown"
-    return f"{host}:{os.getpid()}"
-
-
-def _host_prefix() -> str:
-    """``"<host>:"`` prefix shared by every claim lock issued from this host."""
-    return f"{_claimer_id().split(':', 1)[0]}:"
-
-
 # --- Task creation / mutation ---
 
 def _validate_model_override(model: Optional[str], provider: Optional[str]) -> tuple[Optional[str], Optional[str]]:
@@ -2623,20 +2608,6 @@ class LiveClaimError(ValueError):
         )
 
 
-def _claim_is_live(trow) -> bool:
-    """True when a ``running`` task's claim still protects a run: the worker process
-    it spawned exists (PID + start-time fingerprint). A claim whose worker is gone,
-    or a library/CLI claim that never spawned one, has no run to protect. TTL expiry
-    is deliberately not consulted: ``reclaim_stale_tasks`` extends, not reclaims, the
-    claim of a live worker, so the process is the liveness authority here too."""
-    return bool(
-        trow["status"] == "running"
-        and trow["claim_lock"] is not None
-        and trow["worker_pid"]
-        and _worker_alive(trow["worker_pid"], trow["worker_started_at"])
-    )
-
-
 def complete_task(
     conn: sqlite3.Connection, task_id: str, *, result: Optional[str] = None,
     summary: Optional[str] = None, metadata: Optional[dict] = None,
@@ -4215,6 +4186,12 @@ from hermes_cli.kanban_db_workspace import (
     _is_managed_scratch_path,
     _managed_scratch_path_info,
     _scratch_workspace,
+)
+from hermes_cli.kanban_db_identity import (
+    _claim_is_live,
+    _claimer_id,
+    _effective_uid,
+    _host_prefix,
 )
 from hermes_cli.kanban_db_dispatch import (
     DEFAULT_FAILURE_LIMIT,
