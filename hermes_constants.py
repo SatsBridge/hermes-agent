@@ -1038,6 +1038,8 @@ _SERVICE_TIER_ALIASES = {
     "fast": "priority",
     "on": "priority",
     "priority": "priority",
+    "ultrafast": "ultrafast",
+    "ultra": "ultrafast",
     "flex": "flex",
     "auto": "auto",
     "cold": "cold",
@@ -1047,8 +1049,8 @@ _SERVICE_TIER_ALIASES = {
 def parse_service_tier(value) -> str | None:
     """Normalize a configured service-tier preference.
 
-    Wire values: ``priority`` (aliases ``fast`` / ``on``) and OpenRouter
-    ``flex``. Bounded fast-mode windows: ``auto`` and ``cold`` — stored on
+    Wire values: ``priority`` (aliases ``fast`` / ``on``), ``ultrafast``,
+    and ``flex``. Bounded fast-mode windows: ``auto`` and ``cold`` — stored on
     ``agent.service_tier`` and applied per request by ``agent.fast_mode``,
     not sent as OpenRouter ``service_tier``. Empty, normal, and unrecognized
     values return ``None`` so callers can keep their current default or

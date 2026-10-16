@@ -186,9 +186,11 @@ def _set_fast(rid, params, key, value, session):
     nv = _FAST_WORDS.get(raw, ("normal" if current_tier in STATIC_TIERS else "fast") if raw in {"", "toggle"} else None)
     if nv is None:
         return _err(rid, 4002, f"unknown fast mode: {value}")
+    from hermes_constants import parse_service_tier
+    tier = parse_service_tier(nv)
     overrides = None
     if nv in ("fast", "ultrafast", "flex"):
-        from hermes_cli.models import resolve_fast_mode_overrides
+        from hermes_cli.models import resolve_service_tier_overrides
         if agent is not None:
             target_model = getattr(agent, "model", None)
             target_provider = getattr(agent, "provider", None)
@@ -202,9 +204,8 @@ def _set_fast(rid, params, key, value, session):
             target_api_key = target_runtime.get("api_key")
         if not target_model:
             return _err(rid, 4002, "fast mode is not available without a selected model")
-        overrides = resolve_fast_mode_overrides(target_model, provider=target_provider,
-                                                base_url=target_base_url,
-                                                tier=nv if nv in ("ultrafast", "flex") else None)
+        overrides = resolve_service_tier_overrides(
+            target_model, tier, provider=target_provider, base_url=target_base_url)
         if overrides is not None and nv == "ultrafast":
             from agent.codex_service_tiers import ultrafast_offered
             if not ultrafast_offered(target_model, provider=target_provider,

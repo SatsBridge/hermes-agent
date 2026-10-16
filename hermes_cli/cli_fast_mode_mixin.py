@@ -38,14 +38,14 @@ def handle_fast_command(cli, cmd: str):
             return _cp(_dim_line(_t("fast.ultrafast_not_supported", model=model or "?")), usage)
         feature_name = _t("fast.feature_ultrafast")
     elif _FAST_TIERS[arg][0] == "flex":
-        from hermes_cli.models import resolve_fast_mode_overrides
-        if resolve_fast_mode_overrides(
-            model, provider=getattr(cli, "provider", None), base_url=getattr(cli, "base_url", None),
-            tier="flex") is None:
+        from hermes_cli.models import resolve_service_tier_overrides
+        if resolve_service_tier_overrides(
+            model, "flex", provider=getattr(cli, "provider", None), base_url=getattr(cli, "base_url", None)) is None:
             return _cp(_dim_line(_t("fast.not_supported")), usage)
         feature_name = _t("fast.feature_flex")
     cli.service_tier, saved_value = _FAST_TIERS[arg]
     _retire_agent(cli)
     saved = explicit_global and _save("agent.service_tier", saved_value)
+    cli._service_tier_session_pinned = not saved
     outcome = _scope_outcome(explicit_global, saved)
     _cp(_accent_line(_t("fast.set_to", feature=feature_name, value=saved_value.upper(), scope=outcome)))

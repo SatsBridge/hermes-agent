@@ -201,7 +201,7 @@ def test_delegated_child_does_not_inherit_parent_pin(tier_cfg):
     assert fast_mode.effective_request_overrides(child)["service_tier"] == "flex"
 
 
-def test_nous_and_first_party_ignore_flex():
+def test_nous_ignores_flex_and_first_party_keeps_native_flex():
     nous = _agent(
         provider="nous", base_url=_NOUS, service_tier="flex",
         _service_tier_session_pinned=True,
@@ -216,7 +216,7 @@ def test_nous_and_first_party_ignore_flex():
         _service_tier_session_pinned=True,
     )
     wire = fast_mode.effective_request_overrides(openai)
-    assert "service_tier" not in wire
+    assert wire["service_tier"] == "flex"
     assert "speed" not in wire
 
     portal = resolve_service_tier_overrides(
@@ -235,6 +235,13 @@ def test_openrouter_any_catalog_model_gets_flex_and_priority():
     ) == {"service_tier": "flex"}
     agent = _agent(model=llama, service_tier="flex", _service_tier_session_pinned=True)
     assert fast_mode.effective_request_overrides(agent)["service_tier"] == "flex"
+
+
+def test_openrouter_provider_on_a_different_host_does_not_get_openrouter_tiers():
+    for tier in ("priority", "flex"):
+        assert resolve_service_tier_overrides(
+            "gpt-5.4", tier, provider="openrouter", base_url="https://proxy.example/v1",
+        ) is None
 
 
 def test_extra_body_not_rewritten_when_tier_applied(tier_cfg):
@@ -416,8 +423,8 @@ def test_delegated_child_strips_parent_baked_tier_on_real_path(monkeypatch):
     import tools.delegate_tool_config as dtc
 
     _empty_tier_cfg(monkeypatch)
-    monkeypatch.setattr(dt, "_load_config", lambda: {})
-    monkeypatch.setattr(dtc, "_load_config", lambda: {})
+    monkeypatch.setattr(dt, "_load_config", dict)
+    monkeypatch.setattr(dtc, "_load_config", dict)
     kw = dict(
         api_key="k",
         base_url=_OPENROUTER,
@@ -497,8 +504,8 @@ def test_delegated_child_keeps_parent_raw_when_logical_and_raw_conflict(monkeypa
     import tools.delegate_tool_config as dtc
 
     _empty_tier_cfg(monkeypatch)
-    monkeypatch.setattr(dt, "_load_config", lambda: {})
-    monkeypatch.setattr(dtc, "_load_config", lambda: {})
+    monkeypatch.setattr(dt, "_load_config", dict)
+    monkeypatch.setattr(dtc, "_load_config", dict)
     parent = AIAgent(
         api_key="k",
         base_url=_OPENROUTER,
@@ -547,8 +554,8 @@ def test_delegated_child_keeps_explicit_delegation_tier(monkeypatch):
     import tools.delegate_tool_config as dtc
 
     _empty_tier_cfg(monkeypatch)
-    monkeypatch.setattr(dt, "_load_config", lambda: {})
-    monkeypatch.setattr(dtc, "_load_config", lambda: {})
+    monkeypatch.setattr(dt, "_load_config", dict)
+    monkeypatch.setattr(dtc, "_load_config", dict)
     parent = AIAgent(
         api_key="k",
         base_url=_OPENROUTER,
@@ -618,8 +625,8 @@ def test_cli_fast_parent_bake_not_inherited_by_delegated_child(monkeypatch):
     )
 
     _empty_tier_cfg(monkeypatch)
-    monkeypatch.setattr(dt, "_load_config", lambda: {})
-    monkeypatch.setattr(dtc, "_load_config", lambda: {})
+    monkeypatch.setattr(dt, "_load_config", dict)
+    monkeypatch.setattr(dtc, "_load_config", dict)
     stub = _cli_openrouter_stub("priority")
     route = CLIAgentSetupMixin._resolve_turn_agent_config(stub, "hi")
     parent = AIAgent(
@@ -676,8 +683,8 @@ def test_cli_raw_overrides_stay_unmarked_without_fast(monkeypatch):
     from hermes_cli.cli_agent_setup_mixin import _apply_framework_tier_bake
 
     _empty_tier_cfg(monkeypatch)
-    monkeypatch.setattr(dt, "_load_config", lambda: {})
-    monkeypatch.setattr(dtc, "_load_config", lambda: {})
+    monkeypatch.setattr(dt, "_load_config", dict)
+    monkeypatch.setattr(dtc, "_load_config", dict)
     parent = AIAgent(
         api_key="k",
         base_url=_OPENROUTER,

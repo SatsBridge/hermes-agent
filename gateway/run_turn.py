@@ -310,7 +310,7 @@ class GatewayTurnMixin:
         ``request_overrides`` are deep-merged OVER the per-provider ones so both reach the model."""
         from gateway.run import _deep_merge_request_overrides
         from agent.fast_mode import STATIC_TIERS
-        from hermes_cli.models import resolve_fast_mode_overrides
+        from hermes_cli.models import resolve_service_tier_overrides
         # Tests bind this method onto bare namespaces, so no class-level tables here.
         runtime = {
             k: runtime_kwargs.get(k) for k in (
@@ -334,12 +334,9 @@ class GatewayTurnMixin:
             # None / auto / cold: the bounded window is applied per request by agent.fast_mode.
             route["request_overrides"] = base_request_overrides
             return route
-        try:
-            overrides = resolve_fast_mode_overrides(
-                route["model"], provider=runtime["provider"], base_url=runtime["base_url"], tier=tier,
-            )
-        except Exception:
-            overrides = None
+        overrides = resolve_service_tier_overrides(
+            route["model"], tier, provider=runtime["provider"], base_url=runtime["base_url"],
+        )
         mapped = overrides or {}
         # Fast-mode keys (service_tier / speed) are top-level and don't collide with extra_body.
         route["request_overrides"] = _deep_merge_request_overrides(base_request_overrides, mapped)

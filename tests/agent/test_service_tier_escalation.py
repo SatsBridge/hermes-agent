@@ -62,7 +62,7 @@ def _validation_agent():
     """Minimal agent for ``validate_tool_calls`` production-home tests."""
     agent = _agent(service_tier="flex", escalation=_enabled_cfg(consecutive=1))
     agent.valid_tool_names = {"web_search"}
-    agent._uniquify_tool_call_ids = lambda tcs: tcs
+    agent._uniquify_tool_call_ids = lambda tcs, **_kwargs: tcs
     agent._repair_tool_call = lambda name: None
     agent._invalid_tool_retries = 0
     agent._invalid_json_retries = 0
@@ -626,6 +626,7 @@ class TestInjectAndContinueUnlocksWire:
             agent.log_prefix = ""
             agent._vprint = lambda *_a, **_k: None
             agent._emit_wait_notice = lambda *_a, **_k: None
+            agent._emit_diagnostic_wait = lambda *_a, **_k: None
             agent._emit_interim_assistant_message = lambda *_a, **_k: None
             agent._interim_assistant_visible_text = (
                 lambda msg: (msg.get("content") or "") if isinstance(msg, dict) else ""
@@ -1073,8 +1074,8 @@ class TestConstructionGates:
         import tools.delegate_tool_config as dtc
 
         _write_enabled_escalation_config()
-        monkeypatch.setattr(dt, "_load_config", lambda: {})
-        monkeypatch.setattr(dtc, "_load_config", lambda: {})
+        monkeypatch.setattr(dt, "_load_config", dict)
+        monkeypatch.setattr(dtc, "_load_config", dict)
         kw = dict(
             api_key="k",
             base_url="https://openrouter.ai/api/v1",

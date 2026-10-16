@@ -1099,9 +1099,13 @@ def _(rid, params: dict) -> dict:
 
     def body():
         from run_agent import AIAgent
-        kwargs = _background_agent_kwargs(session["agent"], task_id)
+        live = session["agent"]
+        snap = _background_tier_snapshot(live)
+        kwargs = _background_agent_kwargs(live, task_id, snap)
         with _side_agent_session_db(kwargs.get("session_db")) as session_db:
             agent = AIAgent(**{**kwargs, "session_db": session_db})
+            _apply_background_tier_provenance(agent, live, snap)
+            agent._block_service_tier_escalation = True
             try:
                 result = agent.run_conversation(user_message=text, task_id=task_id)
             finally:

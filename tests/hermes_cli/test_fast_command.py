@@ -71,6 +71,9 @@ class TestHandleFastCommand(unittest.TestCase):
     def test_flex_argument_sets_flex_and_pins(self):
         cli_mod = _import_cli()
         stub = self._make_cli(service_tier=None)
+        stub.provider = "openrouter"
+        stub.base_url = "https://openrouter.ai/api/v1"
+        stub.agent = None
         with (
             patch.object(cli_mod, "_cprint"),
             patch.object(cli_mod, "save_config_value") as mock_save,

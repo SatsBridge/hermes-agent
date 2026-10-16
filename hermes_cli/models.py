@@ -1261,6 +1261,25 @@ def model_supports_ultrafast(model_id: Optional[str]) -> bool:
     return base in _OPENAI_ULTRAFAST_MODELS
 
 
+def _is_openrouter_service_tier_route(provider: Optional[str], base_url: Optional[str]) -> bool:
+    """OpenRouter carries service_tier for any model, independent of its catalog slug."""
+    if provider:
+        normalized = normalize_provider(provider)
+        if normalized == "openrouter":
+            if not base_url:
+                return True
+            from utils import base_url_host_matches
+
+            return base_url_host_matches(base_url, "openrouter.ai")
+        if normalized not in {"auto", "custom"}:
+            return False
+    if not base_url:
+        return False
+    from utils import base_url_host_matches
+
+    return base_url_host_matches(base_url, "openrouter.ai")
+
+
 def resolve_fast_mode_overrides(
     model_id: Optional[str], *, provider: Optional[str] = None, base_url: Optional[str] = None,
     tier: Optional[str] = None,
@@ -1275,15 +1294,18 @@ def resolve_fast_mode_overrides(
     bill MORE for a setting chosen to cost less) and on Grok (xAI publishes no flex tier).
     With ``provider``/``base_url`` the route is gated too (``fast_mode_route_supported``) so proxies
     never see the params. Single fast-mode gate for ``/fast`` and ``agent.fast_mode`` windows."""
-    if not model_supports_fast_mode(model_id):
-        return None
-    if provider or base_url:
+    openrouter = _is_openrouter_service_tier_route(provider, base_url)
+    if (provider or base_url) and not (openrouter and tier != "ultrafast"):
         from hermes_cli.fast_mode_models import fast_mode_route_supported
 
         if not fast_mode_route_supported(model_id, provider, base_url):
             return None
     if tier == "ultrafast":
         return {"service_tier": "ultrafast"} if model_supports_ultrafast(model_id) else None
+    if openrouter:
+        return {"service_tier": "priority"}
+    if not model_supports_fast_mode(model_id):
+        return None
     if tier == "flex":
         from agent.model_metadata import is_grok_46_family
 
@@ -1302,26 +1324,19 @@ def resolve_service_tier_overrides(
 ) -> dict[str, Any] | None:
     """Return request overrides for a normalized service-tier preference.
 
-    OpenRouter accepts both ``flex`` and ``priority`` as top-level request
-    fields for every catalog model. Elsewhere, ``flex`` is warned and ignored;
-    ``priority`` retains the existing model-aware /fast mapping: OpenAI models
-    receive ``service_tier`` while supported Anthropic models receive ``speed``.
+    OpenRouter accepts both ``flex`` and ``priority`` for every catalog model.
+    Elsewhere the existing model-aware mapping remains: OpenAI/Gemini receive
+    ``service_tier`` while supported Anthropic models receive ``speed``.
     """
     from hermes_constants import parse_service_tier
 
     tier = parse_service_tier(service_tier)
-    if tier == "flex":
-        if _is_openrouter_service_tier_route(provider, base_url):
-            return {"service_tier": "flex"}
-        logger.warning(
-            "service_tier 'flex' is OpenRouter-only; ignoring for %s",
-            provider or base_url or "this route",
-        )
-        return None
-    if tier == "priority" and _is_openrouter_service_tier_route(provider, base_url):
-        return {"service_tier": "priority"}
-    if tier == "priority":
-        return resolve_fast_mode_overrides(model_id, provider=provider, base_url=base_url)
+    if tier == "ultrafast":
+        return resolve_fast_mode_overrides(model_id, provider=provider, base_url=base_url, tier=tier)
+    if tier == "flex" and _is_openrouter_service_tier_route(provider, base_url):
+        return {"service_tier": "flex"}
+    if tier in {"priority", "flex"}:
+        return resolve_fast_mode_overrides(model_id, provider=provider, base_url=base_url, tier=tier)
     return None
 
 

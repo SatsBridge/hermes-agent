@@ -533,15 +533,15 @@ class CLIAgentSetupMixin:
         provider. With a static `/fast` tier (fast / ultrafast) attach request_overrides;
         auto/cold tiers are applied per request by agent.fast_mode instead."""
         from agent.fast_mode import STATIC_TIERS
-        from hermes_cli.models import resolve_fast_mode_overrides
+        from hermes_cli.models import resolve_service_tier_overrides
         runtime = _current_runtime(self)
         route = {"model": self.model, "runtime": runtime, "signature": _route_signature(self.model, runtime)}
-        overrides = None
+        mapped = None
         tier = getattr(self, "service_tier", None)
         if tier in STATIC_TIERS:
             try:
-                overrides = resolve_fast_mode_overrides(
-                    route["model"], provider=runtime["provider"], base_url=runtime["base_url"], tier=tier)
+                mapped = resolve_service_tier_overrides(
+                    route["model"], tier, provider=runtime["provider"], base_url=runtime["base_url"])
             except Exception:
                 pass
         route["request_overrides"] = mapped
@@ -631,7 +631,10 @@ class CLIAgentSetupMixin:
         self._reopen_session()
         return True
 
-    def _init_agent(self, *, model_override: str | None = None, runtime_override: dict | None = None, request_overrides: dict | None = None) -> bool:
+    def _init_agent(
+        self, *, model_override: str | None = None, runtime_override: dict | None = None,
+        request_overrides: dict | None = None, framework_baked_tier_keys: dict | None = None,
+    ) -> bool:
         """Build the agent on first use; when resuming, restore history from SQLite.
         Returns True on success."""
         from cli import ChatConsole, _cprint, _prepare_deferred_agent_startup, logger

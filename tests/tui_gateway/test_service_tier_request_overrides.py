@@ -36,15 +36,15 @@ def _build(tier: str | None, model: str = "gpt-5.4", provider: str = "openai",
            service_tier_override: str | None = None):
     """Call _make_agent with the runtime stubbed out, returning AIAgent kwargs.
 
-    The default runtime is a first-party OpenAI route: tier params are gated to the
-    first-party endpoint that bills for them (``fast_mode_route_supported``), so an
-    aggregator runtime deliberately yields no overrides — pinned by the gate test below.
+    The default runtime is a first-party OpenAI route. OpenRouter supports its own
+    service tiers for any catalog model; other aggregators remain gated.
     """
     captured = {}
 
     class _Agent:
         def __init__(self, **kwargs):
             captured.update(kwargs)
+            captured["agent"] = self
 
     resolution = MagicMock()
     resolution.used_fallback = False
@@ -87,6 +87,62 @@ def test_flex_from_config_reaches_request_overrides():
 
     assert kwargs["service_tier"] == "flex"
     assert kwargs["request_overrides"] == {"service_tier": "flex"}
+
+
+def test_session_tier_pin_provenance_is_applied_when_agent_is_built():
+    pinned = _build("priority", service_tier_override="")
+    assert pinned["agent"]._service_tier_session_pinned is True
+    assert not pinned["agent"]._framework_baked_tier_keys
+
+    configured = _build("priority")
+    assert configured["agent"]._service_tier_session_pinned is False
+    assert configured["agent"]._framework_baked_tier_keys == frozenset({"service_tier"})
+
+
+def test_background_agent_uses_a_frozen_service_tier_snapshot(monkeypatch):
+    from tui_gateway import server
+
+    for name, value in {
+        "_load_cfg": dict, "_load_service_tier": lambda: "priority", "_resolve_model": lambda: "gpt-5.4",
+        "_cfg_max_turns": lambda *_args: 25, "_load_enabled_toolsets": lambda *_args: ["file"],
+        "_load_disabled_toolsets": list, "_load_reasoning_config": lambda *_args: None,
+        "_get_db": lambda: None,
+    }.items():
+        monkeypatch.setattr(server, name, value)
+    parent = SimpleNamespace(
+        _service_tier_session_pinned=True, service_tier="flex",
+        _framework_baked_tier_keys=frozenset({"service_tier"}),
+        request_overrides={"service_tier": "flex", "extra_body": {"keep": 1}},
+        _fallback_chain=[],
+    )
+
+    snap = server._background_tier_snapshot(parent)
+    kwargs = server._background_agent_kwargs(parent, "bg-1", snap)
+    side_agent = SimpleNamespace(**kwargs)
+    server._apply_background_tier_provenance(side_agent, parent, snap)
+
+    assert kwargs["service_tier"] == "flex"
+    assert kwargs["request_overrides"] == {"service_tier": "flex", "extra_body": {"keep": 1}}
+    assert side_agent._service_tier_session_pinned is True
+    assert side_agent._framework_baked_tier_keys == frozenset({"service_tier"})
+
+
+def test_resume_preserves_legacy_unmarked_service_tier(monkeypatch):
+    from hermes_state import SessionDB
+    from tui_gateway import server
+
+    monkeypatch.setattr(server, "_row_follows_profile", lambda _row: False)
+    monkeypatch.setattr(
+        SessionDB, "session_gateway_runtime",
+        staticmethod(lambda _row: {"provider": "openrouter", "base_url": "https://openrouter.ai/api/v1"}),
+    )
+    row = {
+        "id": "legacy-session", "title": "Legacy conversation", "model": "gpt-5.4",
+        "billing_provider": "openrouter",
+        "model_config": '{"service_tier":"flex","base_url":"https://openrouter.ai/api/v1"}',
+    }
+
+    assert server._stored_session_runtime_overrides(row)["service_tier_override"] == "flex"
 
 
 def test_tier_merges_with_custom_provider_request_body():
@@ -156,15 +212,12 @@ def test_anthropic_flex_sends_nothing():
     assert not kwargs.get("request_overrides")
 
 
-def test_aggregator_route_gates_the_tier():
-    """First-party tier params never ride aggregator routes: OpenRouter strips
-    ``service_tier`` (charging nothing) or 400s on it, so the route gate drops
-    the override instead of pinning it (parity with the gateway/CLI builders).
-    A tier-eligible model id, so it is specifically the ROUTE gate dropping here."""
+def test_openrouter_route_accepts_catalog_wide_flex():
+    """OpenRouter accepts service tiers for any catalog model."""
     kwargs = _build("flex", model="gpt-4.1",
                     provider="openrouter", base_url="https://openrouter.ai/api/v1")
 
-    assert not kwargs.get("request_overrides")
+    assert kwargs["request_overrides"] == {"service_tier": "flex"}
 
 
 def test_anthropic_priority_sends_speed_not_service_tier():
@@ -410,7 +463,7 @@ def test_config_set_flex_is_session_scoped_and_preserves_custom_body(monkeypatch
 @pytest.mark.parametrize(
     ("provider", "accepted"),
     [
-        ("openrouter", False),
+        ("openrouter", True),
     ],
 )
 def test_config_set_lazy_session_validates_its_selected_route(monkeypatch, tmp_path, provider, accepted):
@@ -480,8 +533,8 @@ def _configure_profile_route(monkeypatch, tmp_path, provider, base_url):
     ("provider", "base_url", "override", "accepted"),
     [
         ("openai-api", None, None, True),
-        ("openrouter", None, None, False),
-        ("openrouter", None, {"model": "gpt-5.4"}, False),
+        ("openrouter", None, None, True),
+        ("openrouter", None, {"model": "gpt-5.4"}, True),
         ("openai-api", "https://proxy.example/v1", None, False),
     ],
 )
@@ -530,7 +583,7 @@ def test_config_set_lazy_flex_uses_profile_default_and_partial_override_route(
     ("provider", "base_url", "accepted"),
     [
         ("openai-api", None, True),
-        ("openrouter", None, False),
+        ("openrouter", None, True),
         ("openai-api", "https://proxy.example/v1", False),
     ],
 )

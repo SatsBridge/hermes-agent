@@ -32,17 +32,17 @@ _FAST_SELECTIONS = {
     "auto": ("auto", "auto", None),
     "cold": ("cold", "cold", None),
     "ultrafast": ("ultrafast", "ultrafast", None),
-    "flex": ("flex", "flex", None),
+    "ultra": ("ultrafast", "ultrafast", None),
 }
 
 
 def _fast_route_supports(model: str, runtime: dict, tier: Optional[str] = None) -> bool:
     """The turn's own gate (``run_turn.py::_resolve_turn_agent_config``): a tier /fast accepts must be
     one the session's next request actually carries, so proxies and other providers are refused."""
-    from hermes_cli.models import resolve_fast_mode_overrides
+    from hermes_cli.models import resolve_service_tier_overrides
 
-    return resolve_fast_mode_overrides(
-        model, provider=runtime.get("provider"), base_url=runtime.get("base_url"), tier=tier) is not None
+    return resolve_service_tier_overrides(
+        model, tier or "priority", provider=runtime.get("provider"), base_url=runtime.get("base_url")) is not None
 
 
 # /reasoning display-toggle arguments -> show_reasoning value.
