@@ -518,7 +518,7 @@ def apply_fast_slash(sid: str, session: dict, arg: str) -> str | None:
     modes = [token for token in tokens if token not in ("--global", "--session")]
     if not tokens or tokens == ["status"]:
         with _session_profile_runtime_scope(session):
-            if _session_uses_compute_host(session):
+            if _session_uses_compute_host(session) and session.get("_compute_host_active"):
                 command = "/fast status" if tokens else "/fast"
                 return _compute_host_slash(sid, session, "fast", command)[1]
             result = _mirror_fast(sid, session, session.get("agent"), arg)
@@ -527,7 +527,7 @@ def apply_fast_slash(sid: str, session: dict, arg: str) -> str | None:
             or len(modes) != 1 or mode not in _FAST_TIERS):
         return None
     with _session_profile_runtime_scope(session):
-        if _session_uses_compute_host(session):
+        if _session_uses_compute_host(session) and session.get("_compute_host_active"):
             return _compute_host_slash(sid, session, "fast", f"/fast {arg}")[1]
         result = _mirror_fast(sid, session, session.get("agent"), arg)
     return result or "(._.) /fast is not available for this model or route/account."

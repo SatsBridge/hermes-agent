@@ -496,6 +496,8 @@ class ComputeHost:
             with session["history_lock"]:
                 messages = server._history_to_messages(list(session.get("history") or []), profile_home=session.get("profile_home"))
                 ack = {"output": output, **_history_meta(session), "messages": messages}
+            if route_name == "slash.fast":
+                ack["service_tier_override"] = session.get("create_service_tier_override")
         ack["session_info"] = server._session_info(session.get("agent"), session)
         return ack
 
