@@ -352,6 +352,28 @@ def test_slash_exec_refusal_keeps_existing_tier_state(monkeypatch, command, mode
     assert not persisted
 
 
+@pytest.mark.parametrize(
+    ("command", "output"),
+    [
+        ("/fast flex garbage", "Unknown argument: flex garbage"),
+        ("/fast on --bogus", "Unknown argument: on --bogus"),
+    ],
+)
+def test_slash_exec_rejected_fast_arguments_leave_state_unchanged(monkeypatch, command, output):
+    agent = SimpleNamespace(
+        model="gpt-5.4", provider="openai", base_url="https://api.openai.com/v1",
+        service_tier="priority", request_overrides={"service_tier": "priority", "other": "keep"},
+    )
+
+    response, session, persisted = _slash_exec(monkeypatch, agent=agent, command=command, output=output)
+
+    assert response["result"]["output"] == output
+    assert agent.service_tier == "priority"
+    assert agent.request_overrides == {"service_tier": "priority", "other": "keep"}
+    assert session["create_service_tier_override"] == "priority"
+    assert not persisted
+
+
 def test_config_set_flex_is_session_scoped_and_preserves_custom_body(monkeypatch):
     from tui_gateway import server
 
@@ -380,6 +402,60 @@ def test_config_set_flex_is_session_scoped_and_preserves_custom_body(monkeypatch
     assert agent.service_tier == "flex"
     assert agent.request_overrides == {"extra_body": {"tenant": "custom"}, "service_tier": "flex"}
     assert session["create_service_tier_override"] == "flex"
+    assert not writes
+
+
+@pytest.mark.parametrize(
+    ("provider", "base_url", "accepted"),
+    [
+        ("openai", "https://api.openai.com/v1", True),
+        ("openrouter", "https://openrouter.ai/api/v1", False),
+    ],
+)
+def test_config_set_lazy_session_validates_its_selected_route(monkeypatch, provider, base_url, accepted):
+    from tui_gateway import server
+
+    session = {
+        "agent": None, "session_key": "fast-session-key",
+        "model_override": {"model": "gpt-5.4", "provider": provider, "base_url": base_url},
+        "create_service_tier_override": "priority",
+    }
+    server._sessions["fast-session"] = session
+    writes = []
+    monkeypatch.setattr(server, "_write_config_key", lambda *args: writes.append(args))
+
+    try:
+        response = server.handle_request({
+            "id": "config-fast-flex-lazy",
+            "method": "config.set",
+            "params": {"session_id": "fast-session", "key": "fast", "value": "flex"},
+        })
+    finally:
+        server._sessions.pop("fast-session", None)
+
+    if accepted:
+        assert response["result"]["value"] == "flex"
+        assert session["create_service_tier_override"] == "flex"
+    else:
+        assert response["error"]["code"] == 4002
+        assert session["create_service_tier_override"] == "priority"
+    assert not writes
+
+
+def test_config_set_global_flex_rejects_unsupported_profile_route(monkeypatch):
+    from tui_gateway import server
+
+    writes = []
+    monkeypatch.setattr(server, "_resolve_startup_runtime", lambda: ("gpt-5.4", "openrouter"))
+    monkeypatch.setattr(server, "_write_config_key", lambda *args: writes.append(args))
+
+    response = server.handle_request({
+        "id": "config-fast-flex-global",
+        "method": "config.set",
+        "params": {"key": "fast", "value": "flex"},
+    })
+
+    assert response["error"]["code"] == 4002
     assert not writes
 
 
