@@ -89,12 +89,6 @@ _OFF_WORDS = {"off", "disable", "false", "0"}
 # ``cli.commands.busy.short_<mode>`` (status line) / ``long_<mode>`` (post-set explanation).
 _BUSY_MODES = ("queue", "steer", "interrupt")
 
-# /fast argument -> (service_tier value, persisted config value)
-_FAST_TIERS = {
-    "fast": ("priority", "fast"), "on": ("priority", "fast"), "normal": (None, "normal"),
-    "off": (None, "normal"), "auto": ("auto", "auto"), "cold": ("cold", "cold"),
-    "ultrafast": ("ultrafast", "ultrafast"), "ultra": ("ultrafast", "ultrafast")}
-
 # /reasoning display toggles: arg -> (attr, value, headline key, follow-up note key or None);
 # the keys resolve under ``cli.commands.reasoning.*`` at call time.
 _REASONING_TOGGLES = {
@@ -2065,34 +2059,9 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
         _persist_display_choice("display.tui_status_indicator", arg, _t("indicator.label"), _t("indicator.note"))
 
     def _handle_fast_command(self, cmd: str):
-        """Handle /fast — toggle fast mode (OpenAI Priority Processing / Anthropic Fast Mode).
-        Session-scoped by default; ``--global`` persists agent.service_tier to config.yaml
-        (parity with /model and /reasoning)."""
-        if not self._fast_command_available():
-            return _cp(f"  {_t('fast.not_supported')}")
-        # Determine the branding for the current model
-        model = getattr(getattr(self, "agent", None), "model", None) or getattr(self, "model", None)
-        anthropic = _probe("hermes_cli.models", "_is_anthropic_fast_model", None, model)
-        feature_name = _t("fast.feature_generic" if anthropic is None
-                          else "fast.feature_anthropic" if anthropic else "fast.feature_openai")
-        raw = _command_arg(cmd)
-        usage = _dim_line(_t("fast.usage"))
-        if not raw or raw.lower() == "status":
-            from agent.fast_mode import service_tier_word
-            status = service_tier_word(self.service_tier)
-            return _cp(_accent_line(_t("fast.status", feature=feature_name, status=status)), usage)
-        arg, explicit_global = _split_scope_flags(raw)
-        if arg not in _FAST_TIERS:
-            return _cp(_dim_line(_t("shared.unknown_argument", arg=arg)), usage)
-        if _FAST_TIERS[arg][0] == "ultrafast":
-            if not _probe("agent.codex_service_tiers", "ultrafast_offered_for", False, self, model):
-                return _cp(_dim_line(_t("fast.ultrafast_not_supported", model=model or "?")), usage)
-            feature_name = _t("fast.feature_ultrafast")
-        self.service_tier, saved_value = _FAST_TIERS[arg]
-        _retire_agent(self)  # Force agent re-init with new service-tier config
-        saved = explicit_global and _save("agent.service_tier", saved_value)
-        outcome = _scope_outcome(explicit_global, saved)
-        _cp(_accent_line(_t("fast.set_to", feature=feature_name, value=saved_value.upper(), scope=outcome)))
+        from hermes_cli.cli_fast_mode_mixin import handle_fast_command
+
+        return handle_fast_command(self, cmd)
 
     # ---- /debug, /update, /voice, /wake ---------------------------------------------------
     def _handle_debug_command(self, cmd_original: str = ""):

@@ -53,10 +53,11 @@ function isStaleCompressReply(r: SessionCompressResponse, current: ReturnType<ty
   )
 }
 
-type FastModeWord = 'fast' | 'normal' | 'ultrafast'
+type FastModeWord = 'fast' | 'normal' | 'ultrafast' | 'flex'
 
 // `config.get/set fast` answer fast | ultrafast | normal (auto/cold windows read as normal here).
-const fastModeWord = (value: unknown): FastModeWord => (value === 'fast' || value === 'ultrafast' ? value : 'normal')
+const fastModeWord = (value: unknown): FastModeWord =>
+  value === 'fast' || value === 'ultrafast' || value === 'flex' ? value : 'normal'
 
 const modelValueForConfigSet = (arg: string) => {
   const trimmed = arg.trim()
@@ -719,7 +720,7 @@ export const sessionCommands: SlashCommand[] = [
     name: 'fast',
     run: (arg, ctx) => {
       const mode = arg.trim().toLowerCase()
-      const valid = new Set(['', 'status', 'normal', 'fast', 'ultrafast', 'on', 'off', 'toggle'])
+      const valid = new Set(['', 'status', 'normal', 'fast', 'ultrafast', 'flex', 'on', 'off', 'toggle'])
 
       if (!valid.has(mode)) {
         return ctx.transcript.sys(t('slashCmd.session.fast.usage'))
@@ -748,7 +749,7 @@ export const sessionCommands: SlashCommand[] = [
                 ? {
                     ...state.info,
                     fast: next !== 'normal',
-                    service_tier: { fast: 'priority', normal: '', ultrafast: 'ultrafast' }[next]
+                    service_tier: { fast: 'priority', normal: '', ultrafast: 'ultrafast', flex: 'flex' }[next]
                   }
                 : state.info
             }))

@@ -14,6 +14,7 @@ just the config resolution.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -25,15 +26,16 @@ import pytest
 # hermes_cli.mcp_startup whose module globals nobody else reads.
 import run_agent
 
-import tui_gateway.server as server
+from tui_gateway import server
 
 
 def _build(tier: str | None, model: str = "gpt-5.4", provider: str = "openai",
-           base_url: str = "https://api.openai.com/v1", runtime_request_overrides=None):
+           base_url: str = "https://api.openai.com/v1", runtime_request_overrides=None,
+           service_tier_override: str | None = None):
     """Call _make_agent with the runtime stubbed out, returning AIAgent kwargs.
 
     The default runtime is a first-party OpenAI route: tier params are gated to the
-    first-party endpoint that bills for them (``_fast_mode_route_supported``), so an
+    first-party endpoint that bills for them (``fast_mode_route_supported``), so an
     aggregator runtime deliberately yields no overrides — pinned by the gate test below.
     """
     captured = {}
@@ -73,7 +75,7 @@ def _build(tier: str | None, model: str = "gpt-5.4", provider: str = "openai",
         patch.object(server, "_load_fallback_model", return_value=None),
         patch.object(server, "_load_enabled_toolsets", return_value=None),
     ):
-        server._make_agent("sid-1", "key-1")
+        server._make_agent("sid-1", "key-1", service_tier_override=service_tier_override)
 
     return captured
 
@@ -109,6 +111,33 @@ def test_priority_from_config_reaches_request_overrides():
     kwargs = _build("priority")
 
     assert kwargs["request_overrides"] == {"service_tier": "priority"}
+
+
+def test_session_tier_override_beats_profile_config_at_build():
+    kwargs = _build("priority", service_tier_override="flex")
+
+    assert kwargs["service_tier"] == "flex"
+    assert kwargs["request_overrides"] == {"service_tier": "flex"}
+
+
+def test_explicit_session_normal_drops_profile_tier_at_build():
+    kwargs = _build("flex", service_tier_override="")
+
+    assert kwargs["service_tier"] == ""
+    assert not kwargs.get("request_overrides")
+
+
+def test_tui_build_does_not_pin_denied_codex_ultrafast(monkeypatch):
+    import agent.codex_service_tiers as codex_tiers
+    from hermes_cli import models
+
+    monkeypatch.setattr(models, "resolve_fast_mode_overrides", lambda *a, **k: {"service_tier": "ultrafast"})
+    monkeypatch.setattr(codex_tiers, "ultrafast_offered", lambda *a, **k: False)
+    kwargs = _build("ultrafast", model="gpt-6-astra", provider="openai-codex",
+                    base_url="https://chatgpt.com/backend-api/codex")
+
+    assert kwargs["service_tier"] == "ultrafast"
+    assert not kwargs.get("request_overrides")
 
 
 def test_no_tier_sends_no_overrides():
@@ -214,6 +243,172 @@ def test_typed_fast_on_uses_provider_appropriate_key():
     _mirror(agent, "on")
 
     assert agent.request_overrides == {"speed": "fast"}
+
+
+def test_typed_fast_flex_sets_static_tier_and_preserves_extra_body():
+    agent = SimpleNamespace(
+        model="gpt-5.4",
+        provider="openai",
+        base_url="https://api.openai.com/v1",
+        service_tier="priority",
+        request_overrides={"extra_body": {"tenant": "custom"}, "service_tier": "priority"},
+    )
+
+    _mirror(agent, "flex")
+
+    assert agent.service_tier == "flex"
+    assert agent.request_overrides == {"extra_body": {"tenant": "custom"}, "service_tier": "flex"}
+
+
+def _slash_exec(monkeypatch, *, agent, command, output):
+    from tui_gateway import server
+
+    class _Worker:
+        def run(self, _command):
+            return output
+
+    session = {
+        "agent": agent,
+        "session_key": "fast-session-key",
+        "slash_worker": _Worker(),
+        "history": [],
+        "profile_home": None,
+        "create_service_tier_override": "priority",
+    }
+    server._sessions["fast-session"] = session
+    monkeypatch.setattr(server, "_session_home_scope", lambda *_args, **_kwargs: nullcontext())
+    monkeypatch.setattr(server, "_session_profile_runtime_scope", lambda *_args, **_kwargs: nullcontext())
+    monkeypatch.setattr(server, "_profile_skill_command", lambda *_args: False)
+    monkeypatch.setattr(server, "_plugin_command_handler", lambda *_args: None)
+    monkeypatch.setattr(server, "_live_slash_command_output", lambda *_args: None)
+    monkeypatch.setattr(server, "_session_info", lambda *_args: {})
+    monkeypatch.setattr(server, "_emit", lambda *_args: None)
+    persisted = []
+    monkeypatch.setattr(server, "_persist_live_session_runtime", lambda s: persisted.append(dict(s)))
+    try:
+        response = server.handle_request({
+            "id": "slash-fast",
+            "method": "slash.exec",
+            "params": {"session_id": "fast-session", "command": command},
+        })
+    finally:
+        server._sessions.pop("fast-session", None)
+    return response, session, persisted
+
+
+@pytest.mark.parametrize("word", ["ultrafast", "ultra"])
+def test_slash_exec_entitled_ultrafast_mirrors_exact_tier(monkeypatch, word):
+    import agent.codex_service_tiers as codex_tiers
+    from hermes_cli import models
+    from tui_gateway import server
+
+    agent = SimpleNamespace(
+        model="gpt-6-astra", provider="openai-codex",
+        base_url="https://chatgpt.com/backend-api/codex", api_key="token",
+        service_tier="priority", request_overrides={"service_tier": "priority", "other": "keep"},
+    )
+    monkeypatch.setattr(models, "resolve_fast_mode_overrides", lambda *a, **k: {"service_tier": "ultrafast"})
+    monkeypatch.setattr(codex_tiers, "ultrafast_offered", lambda *a, **k: True)
+
+    response, session, persisted = _slash_exec(monkeypatch, agent=agent, command=f"/fast {word}", output="set")
+
+    assert response["result"]["output"] == "set"
+    assert agent.service_tier == "ultrafast"
+    assert agent.request_overrides == {"other": "keep", "service_tier": "ultrafast"}
+    assert session["create_service_tier_override"] == "ultrafast"
+    assert persisted
+
+
+@pytest.mark.parametrize(
+    ("command", "model", "route", "ultrafast_offered"),
+    [
+        ("/fast ultra", "gpt-6-astra", "openai-codex", False),
+        ("/fast flex", "unsupported-model", "openai", True),
+        ("/fast flex", "gpt-4.1", "openrouter", True),
+    ],
+)
+def test_slash_exec_refusal_keeps_existing_tier_state(monkeypatch, command, model, route, ultrafast_offered):
+    import agent.codex_service_tiers as codex_tiers
+    from hermes_cli import models
+
+    agent = SimpleNamespace(
+        model=model, provider=route, base_url="https://openrouter.ai/api/v1" if route == "openrouter" else None,
+        api_key="token", service_tier="priority",
+        request_overrides={"service_tier": "priority", "other": "keep"},
+    )
+    session_pin = "priority"
+    # The resolver's real gate determines unsupported model/route cases; the ultrafast row
+    # reaches the entitlement check and is refused there.
+    if command.endswith("ultra"):
+        monkeypatch.setattr(models, "resolve_fast_mode_overrides", lambda *a, **k: {"service_tier": "ultrafast"})
+        monkeypatch.setattr(codex_tiers, "ultrafast_offered", lambda *a, **k: ultrafast_offered)
+    response, session, persisted = _slash_exec(
+        monkeypatch, agent=agent, command=command, output="not available for this model/account/route")
+
+    assert "not available" in response["result"]["output"]
+    assert agent.service_tier == "priority"
+    assert agent.request_overrides == {"service_tier": "priority", "other": "keep"}
+    assert session["create_service_tier_override"] == session_pin
+    assert not persisted
+
+
+def test_config_set_flex_is_session_scoped_and_preserves_custom_body(monkeypatch):
+    from tui_gateway import server
+
+    agent = SimpleNamespace(
+        model="gpt-5.4", provider="openai", base_url="https://api.openai.com/v1",
+        service_tier="priority", request_overrides={"extra_body": {"tenant": "custom"}, "speed": "stale"},
+    )
+    session = {"agent": agent, "session_key": "fast-session-key"}
+    server._sessions["fast-session"] = session
+    writes = []
+    monkeypatch.setattr(server, "_persist_live_session_runtime", lambda _session: None)
+    monkeypatch.setattr(server, "_write_config_key", lambda *args: writes.append(args))
+    monkeypatch.setattr(server, "_emit", lambda *_args: None)
+    monkeypatch.setattr(server, "_session_info", lambda *_args: {})
+
+    try:
+        response = server.handle_request({
+            "id": "config-fast-flex",
+            "method": "config.set",
+            "params": {"session_id": "fast-session", "key": "fast", "value": "flex"},
+        })
+    finally:
+        server._sessions.pop("fast-session", None)
+
+    assert response["result"]["value"] == "flex"
+    assert agent.service_tier == "flex"
+    assert agent.request_overrides == {"extra_body": {"tenant": "custom"}, "service_tier": "flex"}
+    assert session["create_service_tier_override"] == "flex"
+    assert not writes
+
+
+def test_config_set_unsupported_flex_does_not_mutate_session(monkeypatch):
+    from tui_gateway import server
+
+    agent = SimpleNamespace(
+        model="claude-opus-4-8", provider="anthropic", base_url="https://api.anthropic.com",
+        service_tier="priority", request_overrides={"speed": "fast", "extra_body": {"keep": True}},
+    )
+    session = {"agent": agent, "session_key": "fast-session-key", "create_service_tier_override": "priority"}
+    server._sessions["fast-session"] = session
+    monkeypatch.setattr(server, "_write_config_key", lambda *_args: None)
+    monkeypatch.setattr(server, "_emit", lambda *_args: None)
+    monkeypatch.setattr(server, "_session_info", lambda *_args: {})
+
+    try:
+        response = server.handle_request({
+            "id": "config-fast-flex",
+            "method": "config.set",
+            "params": {"session_id": "fast-session", "key": "fast", "value": "flex"},
+        })
+    finally:
+        server._sessions.pop("fast-session", None)
+
+    assert response["error"]["code"] == 4002
+    assert agent.service_tier == "priority"
+    assert agent.request_overrides == {"speed": "fast", "extra_body": {"keep": True}}
+    assert session["create_service_tier_override"] == "priority"
 
 
 def test_resolver_crash_fails_open_to_no_overrides():

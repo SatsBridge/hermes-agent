@@ -67,6 +67,21 @@ class TestHandleFastCommand(unittest.TestCase):
         self.assertIsNone(stub.service_tier)
         self.assertIsNone(stub.agent)
 
+    def test_flex_argument_selects_flex_for_supported_openai_route(self):
+        cli_mod = _import_cli()
+        stub = self._make_cli(service_tier=None)
+        stub.provider = "openai"
+        stub.base_url = "https://api.openai.com/v1"
+        stub.agent = None
+        with (
+            patch.object(cli_mod, "_cprint"),
+            patch.object(cli_mod, "save_config_value") as mock_save,
+        ):
+            cli_mod.HermesCLI._handle_fast_command(stub, "/fast flex")
+
+        self.assertEqual(stub.service_tier, "flex")
+        mock_save.assert_not_called()
+
 class TestPriorityProcessingModels(unittest.TestCase):
     """Verify the expanded Priority Processing model registry."""
 

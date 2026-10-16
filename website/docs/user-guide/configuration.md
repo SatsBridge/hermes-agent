@@ -2067,11 +2067,11 @@ The override applies automatically everywhere: CLI startup, `hermes -p` one-shot
 
 ## Fast Mode
 
-Fast mode asks the provider for faster output at a premium price: OpenAI [Priority Processing](https://openai.com/api-priority-processing/) (`service_tier: priority`) and Ultrafast (`service_tier: ultrafast`) on supported OpenAI models, xAI Priority Processing on Grok 4.6, and Anthropic [Fast Mode](https://platform.claude.com/docs/en/build-with-claude/fast-mode) (`speed: fast`, Opus 4.8 / Opus 5 / Opus 5.5 only). The `openai` and `openai-api` providers use the first-party OpenAI endpoint. It is **off by default**.
+Fast mode selects a provider tier: OpenAI [Priority Processing](https://openai.com/api-priority-processing/) (`service_tier: priority`), lower-cost Flex (`service_tier: flex`) on eligible OpenAI and Gemini models, and Ultrafast (`service_tier: ultrafast`) on supported OpenAI models; xAI Priority Processing on Grok 4.6; or Anthropic [Fast Mode](https://platform.claude.com/docs/en/build-with-claude/fast-mode) (`speed: fast`, Opus 4.8 / Opus 5 / Opus 5.5 only). Gemini Flex is limited to Gemini 2.5+ and is sent as a top-level `service_tier` field. The `openai` and `openai-api` providers use the first-party OpenAI endpoint. It is **off by default**.
 
 ```yaml
 agent:
-  service_tier: ""          # "" / normal | fast | priority | ultrafast | auto | cold
+  service_tier: ""          # "" / normal | fast | priority | flex | ultrafast | auto | cold
   fast_auto_seconds: 60     # window for auto / cold
 ```
 
@@ -2079,12 +2079,13 @@ agent:
 |------|---------------------------|------------|
 | `normal` (default, `""`) | Never | Cheapest; standard latency |
 | `fast` | Every request | Long interactive sessions where you always want speed |
+| `flex` | Every request, on eligible OpenAI or Gemini 2.5+ routes | Lower-cost processing when latency is less important |
 | `auto` | Requests in the first `fast_auto_seconds` of **every** turn | Snappy first reply; long tool loops fall back to standard pricing |
 | `cold` | Same window, but only on the **first turn** of a session (no prior history) | Fast onboarding reply, standard pricing afterwards |
 
-`/fast normal|fast|ultrafast|auto|cold` switches the mode for the session (`/fast ultra` is shorthand for `ultrafast`). On a ChatGPT/Codex subscription, Ultrafast is offered only when your account's Codex model catalog lists it for the current model; the backend otherwise accepts the request and serves standard speed. Add `--global` to persist to `config.yaml`. `/fast` alone shows the current mode.
+`/fast normal|fast|flex|ultrafast|auto|cold` switches the mode for the session (`/fast ultra` is shorthand for `ultrafast`). Flex is only offered where the selected first-party OpenAI/Gemini model and route support it; unsupported selections are not converted to a different tier. On a ChatGPT/Codex subscription, Ultrafast is offered only when your account's Codex model catalog lists it for the current model; the backend otherwise accepts the request and serves standard speed. Add `--global` to persist to `config.yaml`. `/fast` alone shows the current mode.
 
-**Cost note:** both providers bill fast requests at a multiplier on standard rates (Anthropic: $8 / $40 per MTok in/out on Opus 5.5, $10 / $50 on Opus 5 and Opus 4.8), stacking with prompt-cache pricing. Hermes prices each Anthropic response from the speed the API reports in `usage.speed`. `auto`/`cold` bound that premium to the window only. Fast params are only sent to the first-party endpoint that supports them (`api.openai.com` / Codex subscription, `api.anthropic.com`, `api.x.ai`); OpenRouter, Nous Portal, Azure, Bedrock, and custom `base_url` routes never receive them in any mode.
+**Cost note:** premium tiers can cost more than standard (Anthropic: $8 / $40 per MTok in/out on Opus 5.5, $10 / $50 on Opus 5 and Opus 4.8), stacking with prompt-cache pricing; Flex is the lower-cost provider option where supported. Hermes prices each Anthropic response from the speed the API reports in `usage.speed`. `auto`/`cold` bound the premium tier to the window only. Fast params are only sent to first-party endpoints that support them; OpenRouter, Nous Portal, Azure, Bedrock, and custom `base_url` routes never receive a derived first-party tier.
 
 **Prompt cache:** only the per-request parameter changes between requests; the system prompt, tools, and messages stay byte-identical. Anthropic keeps a separate prompt cache for each speed, so on Anthropic every `auto`/`cold` window boundary re-writes the conversation prefix at the new speed. For long Anthropic sessions, `fast` or `normal` keeps a single warm cache.
 
