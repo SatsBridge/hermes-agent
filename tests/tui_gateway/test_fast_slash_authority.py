@@ -31,8 +31,14 @@ def _slash(monkeypatch, session, command: str) -> dict:
 
 
 def _host_ack(monkeypatch, session, command: str) -> dict:
-    monkeypatch.setattr(server, "_history_to_messages", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(server, "_session_info", lambda *_args, **_kwargs: {})
+    with monkeypatch.context() as scoped:
+        scoped.setattr(server, "_sessions", {"sid-fast": session})
+        scoped.setattr(server, "_history_to_messages", lambda *_args, **_kwargs: [])
+        scoped.setattr(server, "_session_info", lambda *_args, **_kwargs: {})
+        return _run_host_control(session, command)
+
+
+def _run_host_control(session, command: str) -> dict:
     host = ComputeHost.__new__(ComputeHost)
     replies = []
     host._guarded = lambda frame, _error_type, body, **_kwargs: body(
@@ -169,3 +175,156 @@ def test_compute_host_fast_global_persists_config_and_reports_scope(monkeypatch,
     assert "global" in ack["output"].lower()
     assert "create_service_tier_override" not in session
     assert agent.service_tier == "flex"
+
+
+@pytest.mark.parametrize("command, mode, pin", [
+    ("/fast normal --session", "normal", ""),
+    ("/fast auto --session", "auto", "auto"),
+    ("/fast cold --session", "cold", "cold"),
+    ("/fast flex --session", "flex", "flex"),
+])
+def test_compute_host_fast_pin_crosses_parent_boundary(monkeypatch, command, mode, pin):
+    child = {"agent": _agent(tier="priority", provider="openrouter",
+                             base_url="https://openrouter.ai/api/v1"),
+             "session_key": "key", "history": [], "history_lock": threading.RLock(),
+             "create_service_tier_override": "priority"}
+    parent = {"agent": None, "session_key": "key", "history": [],
+              "history_lock": threading.RLock(), "create_service_tier_override": "priority",
+              "_compute_host_active": True}
+    monkeypatch.setattr(server, "_session_uses_compute_host", lambda _session: True)
+    monkeypatch.setattr(server, "_persist_live_session_runtime", lambda _session: None)
+    monkeypatch.setattr(server, "_emit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(server, "_write_config_key", lambda *_args: None)
+    monkeypatch.setattr(server, "_send_compute_host_control",
+                        lambda _sid, **kwargs: _host_ack(monkeypatch, child, kwargs["command"]))
+
+    response = _slash(monkeypatch, parent, command)["result"]["output"]
+
+    assert f"Fast mode set to {mode}." in response
+    assert parent.get("create_service_tier_override") == pin
+    assert server._compute_host_turn_frame("rid", "sid-fast", parent, "next turn")[
+        "service_tier_override"] == pin
+
+
+def test_compute_host_fast_global_unpin_crosses_parent_and_restart_boundary(monkeypatch):
+    child = {"agent": _agent(tier="priority", provider="openrouter",
+                             base_url="https://openrouter.ai/api/v1"),
+             "session_key": "key", "history": [], "history_lock": threading.RLock(),
+             "create_service_tier_override": "priority"}
+    parent = {"agent": None, "session_key": "key", "history": [],
+              "history_lock": threading.RLock(), "create_service_tier_override": "priority",
+              "_compute_host_active": True}
+    monkeypatch.setattr(server, "_session_uses_compute_host", lambda _session: True)
+    monkeypatch.setattr(server, "_persist_live_session_runtime", lambda _session: None)
+    monkeypatch.setattr(server, "_emit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(server, "_write_config_key", lambda *_args: None)
+    monkeypatch.setattr(server, "_send_compute_host_control",
+                        lambda _sid, **kwargs: _host_ack(monkeypatch, child, kwargs["command"]))
+
+    response = _slash(monkeypatch, parent, "/fast normal --global")["result"]["output"]
+
+    assert "globally" in response
+    assert "create_service_tier_override" not in parent
+    frame = server._compute_host_turn_frame("rid", "sid-fast", parent, "next turn")
+    assert frame["service_tier_override"] is None
+
+
+def test_compute_host_fast_failed_global_save_mirrors_session_pin(monkeypatch):
+    child = {"agent": _agent(tier="priority", provider="openrouter",
+                             base_url="https://openrouter.ai/api/v1"),
+             "session_key": "key", "history": [], "history_lock": threading.RLock(),
+             "create_service_tier_override": "priority"}
+    parent = {"agent": None, "session_key": "key", "history": [],
+              "history_lock": threading.RLock(), "create_service_tier_override": "priority",
+              "_compute_host_active": True}
+    monkeypatch.setattr(server, "_session_uses_compute_host", lambda _session: True)
+    monkeypatch.setattr(server, "_persist_live_session_runtime", lambda _session: None)
+    monkeypatch.setattr(server, "_emit", lambda *_args, **_kwargs: None)
+
+    def fail_save(*_args):
+        raise OSError("readonly")
+
+    monkeypatch.setattr(server, "_write_config_key", fail_save)
+    monkeypatch.setattr(server, "_send_compute_host_control",
+                        lambda _sid, **kwargs: _host_ack(monkeypatch, child, kwargs["command"]))
+
+    response = _slash(monkeypatch, parent, "/fast flex --global")["result"]["output"]
+
+    assert "session only" in response
+    assert parent["create_service_tier_override"] == "flex"
+    assert server._compute_host_turn_frame("rid", "sid-fast", parent, "next turn")[
+        "service_tier_override"] == "flex"
+
+
+def test_compute_host_fast_refusal_preserves_parent_pin(monkeypatch):
+    child = {"agent": _agent(tier="priority", model="Qwen3.8-27B-UD-Q4_K_M", provider="llamacpp",
+                             base_url="http://127.0.0.1:18434/v1"),
+             "session_key": "key", "history": [], "history_lock": threading.RLock(),
+             "create_service_tier_override": "priority"}
+    parent = {"agent": None, "session_key": "key", "history": [],
+              "history_lock": threading.RLock(), "create_service_tier_override": "priority",
+              "_compute_host_active": True}
+    monkeypatch.setattr(server, "_session_uses_compute_host", lambda _session: True)
+    monkeypatch.setattr(server, "_persist_live_session_runtime", lambda _session: pytest.fail("refusal persisted"))
+    monkeypatch.setattr(server, "_send_compute_host_control",
+                        lambda _sid, **kwargs: _host_ack(monkeypatch, child, kwargs["command"]))
+
+    response = _slash(monkeypatch, parent, "/fast flex --session")["result"]["output"]
+
+    assert "not available" in response.lower()
+    assert parent["create_service_tier_override"] == "priority"
+
+
+@pytest.mark.parametrize("command, expected, pin", [
+    ("/fast normal --session", "normal", ""), ("/fast status", "fast", None)])
+def test_lazy_compute_host_fast_works_before_first_turn(monkeypatch, command, expected, pin):
+    parent = {"agent": None, "agent_ready": threading.Event(), "session_key": "lazy-key",
+              "history": [], "history_lock": threading.RLock()}
+    forwarded = []
+    monkeypatch.setattr(server, "_session_uses_compute_host", lambda _session: True)
+    monkeypatch.setattr(server, "_resolve_agent_model_runtime", lambda *_args: (
+        "gpt-5.4", {"provider": "openai", "base_url": "https://api.openai.com/v1", "api_key": None}))
+    monkeypatch.setattr(server, "_load_cfg", lambda: {"agent": {"service_tier": "priority"}})
+    monkeypatch.setattr(server, "_send_compute_host_control", lambda *_args, **_kwargs: forwarded.append(True))
+
+    response = _slash(monkeypatch, parent, command)["result"]["output"]
+
+    assert expected.lower() in response.lower()
+    assert not forwarded
+    if pin is not None:
+        assert parent["create_service_tier_override"] == pin
+        assert "normal" in _slash(monkeypatch, parent, "/fast status")["result"]["output"].lower()
+
+
+def test_lazy_fast_pin_is_used_when_compute_host_builds_first_agent(monkeypatch):
+    parent = {"agent": None, "agent_ready": threading.Event(), "session_key": "lazy-key",
+              "history": [], "history_lock": threading.RLock(), "model_override": None,
+              "create_service_tier_override": ""}
+    frame = server._compute_host_turn_frame("rid", "sid-fast", parent, "first turn")
+    captured = {}
+
+    class _Server:
+        _sessions = {}
+
+        @staticmethod
+        def _make_agent(*_args, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+        @staticmethod
+        def _transfer_db_to_agent(*_args):
+            return False
+
+        @staticmethod
+        def _init_session(sid, key, agent, history, **_kwargs):
+            _Server._sessions[sid] = {"agent": agent, "session_key": key, "history": history,
+                                      "history_lock": threading.RLock()}
+
+    host = ComputeHost.__new__(ComputeHost)
+    host._transport = object()
+    monkeypatch.setattr("tui_gateway.transport.bind_transport", lambda *_args: None)
+    monkeypatch.setattr("tui_gateway.transport.reset_transport", lambda *_args: None)
+
+    host._build_server_session(_Server, frame, "sid-fast")
+
+    assert captured["service_tier_override"] == ""

@@ -257,6 +257,11 @@ def _apply_compute_host_metadata_mirror(session: dict, frame: dict | None) -> No
         if frame.get("message_count") is not None:
             with contextlib.suppress(Exception):
                 session["_metadata_message_count"] = int(frame.get("message_count") or 0)
+        if "service_tier_override" in frame:
+            if frame["service_tier_override"] is None:
+                session.pop("create_service_tier_override", None)
+            else:
+                session["create_service_tier_override"] = frame["service_tier_override"]
     info = frame.get("session_info")
     if isinstance(info, dict):
         session["_metadata_mirror"] = {**_metadata_mirror(session), **info}
