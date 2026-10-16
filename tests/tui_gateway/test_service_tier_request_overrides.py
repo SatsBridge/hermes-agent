@@ -315,12 +315,13 @@ def test_typed_fast_flex_sets_static_tier_and_preserves_extra_body():
     assert agent.request_overrides == {"extra_body": {"tenant": "custom"}, "service_tier": "flex"}
 
 
-def _slash_exec(monkeypatch, *, agent, command, output):
+def _slash_exec(monkeypatch, *, agent, command, output="", worker_run=None):
     from tui_gateway import server
 
     class _Worker:
         def run(self, _command):
-            return output
+            session["worker_calls"].append(_command)
+            return worker_run(_command) if worker_run else output
 
     session = {
         "agent": agent,
@@ -329,6 +330,7 @@ def _slash_exec(monkeypatch, *, agent, command, output):
         "history": [],
         "profile_home": None,
         "create_service_tier_override": "priority",
+        "worker_calls": [],
     }
     server._sessions["fast-session"] = session
     monkeypatch.setattr(server, "_session_home_scope", lambda *_args, **_kwargs: nullcontext())
@@ -367,7 +369,8 @@ def test_slash_exec_entitled_ultrafast_mirrors_exact_tier(monkeypatch, word):
 
     response, session, persisted = _slash_exec(monkeypatch, agent=agent, command=f"/fast {word}", output="set")
 
-    assert response["result"]["output"] == "set"
+    assert "ultrafast" in response["result"]["output"]
+    assert session["worker_calls"] == []
     assert agent.service_tier == "ultrafast"
     assert agent.request_overrides == {"other": "keep", "service_tier": "ultrafast"}
     assert session["create_service_tier_override"] == "ultrafast"
@@ -400,6 +403,7 @@ def test_slash_exec_refusal_keeps_existing_tier_state(monkeypatch, command, mode
         monkeypatch, agent=agent, command=command, output="not available for this model/account/route")
 
     assert "not available" in response["result"]["output"]
+    assert session["worker_calls"] == []
     assert agent.service_tier == "priority"
     assert agent.request_overrides == {"service_tier": "priority", "other": "keep"}
     assert session["create_service_tier_override"] == session_pin
@@ -448,10 +452,11 @@ def test_slash_fast_normal_pins_wire_and_resume_over_per_model_tier(monkeypatch,
         _service_tier_session_pinned=False,
     )
 
-    response, _session, persisted = _slash_exec(
+    response, session, persisted = _slash_exec(
         monkeypatch, agent=agent, command="/fast normal --session", output="(._.) /fast set to NORMAL")
 
-    assert response["result"]["output"].startswith("(._.)")
+    assert response["result"]["output"] == "Fast mode set to normal."
+    assert session["worker_calls"] == []
     assert agent._service_tier_session_pinned is True
     assert fast_mode.effective_request_overrides(agent) == {}
     runtime = server._runtime_model_config(agent)
@@ -521,13 +526,108 @@ def test_slash_fast_real_refusal_text_does_not_mutate_global_or_session(
     response, session, persisted = _slash_exec(
         monkeypatch, agent=agent, command=command, output=output)
 
-    assert response["result"]["output"] == output
+    assert "not available" in response["result"]["output"]
+    assert session["worker_calls"] == []
     assert writes == []
     assert agent.service_tier == "priority"
     assert agent.request_overrides == {"service_tier": "priority", "extra_body": {"keep": 1}}
     assert agent._service_tier_session_pinned is True
     assert session["create_service_tier_override"] == "priority"
     assert not persisted
+
+
+@pytest.mark.parametrize("mode", ["auto", "cold"])
+def test_slash_exec_rejects_bounded_modes_on_unsupported_route_without_worker_or_mutation(
+        monkeypatch, mode):
+    agent = SimpleNamespace(
+        model="Qwen3.8-27B", provider="llamacpp", base_url="http://localhost:8080/v1",
+        api_key="token", service_tier="priority", request_overrides={"service_tier": "priority"},
+    )
+    writes = []
+    monkeypatch.setattr(server, "_write_config_key", lambda *args: writes.append(args))
+
+    response, session, persisted = _slash_exec(
+        monkeypatch, agent=agent, command=f"/fast {mode} --global")
+
+    assert "not available" in response["result"]["output"]
+    assert session["worker_calls"] == []
+    assert writes == []
+    assert agent.service_tier == "priority"
+    assert agent.request_overrides == {"service_tier": "priority"}
+    assert session["create_service_tier_override"] == "priority"
+    assert not persisted
+
+
+@pytest.mark.parametrize("mode", ["auto", "cold"])
+def test_slash_exec_accepts_bounded_modes_on_supported_route(mode, monkeypatch):
+    agent = SimpleNamespace(
+        model="gpt-4.1", provider="openrouter", base_url="https://openrouter.ai/api/v1",
+        api_key="token", service_tier="priority", request_overrides={"service_tier": "priority"},
+    )
+
+    response, session, persisted = _slash_exec(monkeypatch, agent=agent, command=f"/fast {mode}")
+
+    assert mode in response["result"]["output"]
+    assert session["worker_calls"] == []
+    assert agent.service_tier == mode
+    assert not agent.request_overrides
+    assert session["create_service_tier_override"] == mode
+    assert persisted
+
+
+def test_slash_exec_uses_live_route_before_worker_can_write_profile_config(monkeypatch, tmp_path):
+    import yaml
+    from tui_gateway.slash_worker import _run as run_slash_worker
+    from hermes_cli.cli_fast_mode_mixin import handle_fast_command
+
+    home = _configure_profile_route(monkeypatch, tmp_path, "openai-api", None)
+    worker_cli = SimpleNamespace(
+        _fast_command_available=lambda: True,
+        agent=SimpleNamespace(model="gpt-5.4"), model="gpt-5.4", provider="openai",
+        base_url="https://api.openai.com/v1", service_tier="priority",
+        process_command=lambda command: handle_fast_command(worker_cli, command),
+    )
+
+    def worker_fast(command):
+        return run_slash_worker(worker_cli, command)
+
+    worker_fast("/fast flex --global")
+    worker_config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    assert worker_config["agent"]["service_tier"] == "flex"
+    worker_config["agent"]["service_tier"] = "priority"
+    atomic_config_write(home / "config.yaml", worker_config)
+
+    agent = SimpleNamespace(
+        model="gpt-5.4", provider="openai", base_url="https://proxy.example/v1", api_key="token",
+        service_tier="priority", request_overrides={"service_tier": "priority"},
+    )
+    response, session, persisted = _slash_exec(
+        monkeypatch, agent=agent, command="/fast flex --global", worker_run=worker_fast)
+
+    config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    assert "not available" in response["result"]["output"]
+    assert session["worker_calls"] == []
+    assert config["agent"]["service_tier"] == "priority"
+    assert agent.service_tier == "priority"
+    assert not persisted
+
+
+def test_slash_exec_global_fast_updates_config_on_live_eligible_route(monkeypatch, tmp_path):
+    import yaml
+
+    home = _configure_profile_route(monkeypatch, tmp_path, "openai-api", None)
+    agent = SimpleNamespace(
+        model="gpt-5.4", provider="openai", base_url="https://api.openai.com/v1", api_key="token",
+        service_tier="priority", request_overrides={"service_tier": "priority"},
+    )
+
+    response, session, _persisted = _slash_exec(
+        monkeypatch, agent=agent, command="/fast flex --global")
+
+    config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    assert "flex" in response["result"]["output"]
+    assert session["worker_calls"] == []
+    assert config["agent"]["service_tier"] == "flex"
 
 
 def test_config_set_flex_is_session_scoped_and_preserves_custom_body(monkeypatch):
