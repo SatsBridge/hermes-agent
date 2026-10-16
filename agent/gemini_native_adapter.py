@@ -183,7 +183,7 @@ def gemini_supports_service_tier(model: str) -> bool:
     reject the whole request on an unexpected body field (400 INVALID_ARGUMENT).
 
     Last-line defense, duplicating the eligibility gate in
-    ``hermes_cli.models._is_google_service_tier_model`` at the adapter: a tier pinned into
+    ``hermes_cli.fast_mode_models.is_google_service_tier_model`` at the adapter: a tier pinned into
     ``request_overrides`` at agent build survives a runtime ``/model`` switch verbatim
     (``_apply_switched_provider_request_overrides`` keeps ``service_tier``/``speed``), so
     without this gate a switch from a tier-eligible Gemini to an older one would hard-fail

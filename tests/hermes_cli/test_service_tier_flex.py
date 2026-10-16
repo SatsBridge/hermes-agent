@@ -66,7 +66,7 @@ class TestGoogleServiceTier(unittest.TestCase):
     """
 
     def test_gemini_models_detected(self):
-        from hermes_cli.models import _is_google_service_tier_model
+        from hermes_cli.fast_mode_models import is_google_service_tier_model
 
         for model in [
             "gemini-3.6-flash",
@@ -74,10 +74,10 @@ class TestGoogleServiceTier(unittest.TestCase):
             "gemini-2.5-pro",
             "google/gemini-3.5-flash",
         ]:
-            assert _is_google_service_tier_model(model), f"{model} should be tier-eligible"
+            assert is_google_service_tier_model(model), f"{model} should be tier-eligible"
 
     def test_non_gemini_models_not_detected(self):
-        from hermes_cli.models import _is_google_service_tier_model
+        from hermes_cli.fast_mode_models import is_google_service_tier_model
 
         # Two-level aggregator ids are deliberately ineligible (route-gated anyway;
         # matching them would only expose a lying /fast toggle).
@@ -85,7 +85,7 @@ class TestGoogleServiceTier(unittest.TestCase):
             "gpt-5.4", "claude-opus-4-6",
             "openrouter/openai/gpt-4.1", "openrouter/google/gemini-3.5-flash",
         ]:
-            assert not _is_google_service_tier_model(model), f"{model} must not be tier-eligible"
+            assert not is_google_service_tier_model(model), f"{model} must not be tier-eligible"
 
 
 class TestFlexTier(unittest.TestCase):
@@ -150,7 +150,7 @@ class TestGeminiVersionGate(unittest.TestCase):
     """
 
     def test_supported_versions_detected(self):
-        from hermes_cli.models import _is_google_service_tier_model
+        from hermes_cli.fast_mode_models import is_google_service_tier_model
 
         for model in [
             "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
@@ -158,22 +158,22 @@ class TestGeminiVersionGate(unittest.TestCase):
             "gemini-3.5-flash", "gemini-3.6-flash",
             "google/gemini-3.5-flash",
         ]:
-            assert _is_google_service_tier_model(model), f"{model} should be eligible"
+            assert is_google_service_tier_model(model), f"{model} should be eligible"
 
     def test_pre_2_5_models_excluded(self):
-        from hermes_cli.models import _is_google_service_tier_model
+        from hermes_cli.fast_mode_models import is_google_service_tier_model
 
         for model in [
             "gemini-1.5-pro", "gemini-1.5-flash",
             "gemini-2.0-flash", "google/gemini-2.0-flash-lite",
         ]:
-            assert not _is_google_service_tier_model(model), f"{model} predates tiers"
+            assert not is_google_service_tier_model(model), f"{model} predates tiers"
 
     def test_non_gemini_google_models_excluded(self):
-        from hermes_cli.models import _is_google_service_tier_model
+        from hermes_cli.fast_mode_models import is_google_service_tier_model
 
         for model in ["gemma-3-27b", "google/gemma-2-9b", "lyria-2"]:
-            assert not _is_google_service_tier_model(model), f"{model} is not Gemini"
+            assert not is_google_service_tier_model(model), f"{model} is not Gemini"
 
 
 class TestTierWhitelist(unittest.TestCase):

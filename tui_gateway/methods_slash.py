@@ -415,32 +415,50 @@ def _mirror_personality(sid, session, agent, arg) -> None:
 
 
 _FAST_TIERS = {"fast": "priority", "on": "priority", "normal": None, "off": None, "auto": "auto", "cold": "cold",
-               "ultrafast": "ultrafast", "ultra": "ultrafast"}
+               "ultrafast": "ultrafast", "ultra": "ultrafast", "flex": "flex"}
 
 
 def _mirror_fast(sid, session, agent, arg) -> None:
     if agent:
-        if arg.lower() in _FAST_TIERS:
-            # Keep request_overrides in lock-step with service_tier (mirrors _set_fast in
-            # methods_config_set): the transport emits the tier from the overrides, so setting
-            # only service_tier would leave a session built with a configured tier still
-            # sending it after `/fast off` (reporting normal while billing the tier), and
-            # `/fast on` would relabel without sending. auto/cold windows are applied per
-            # request by agent.fast_mode, so they only clear pinned tier keys.
-            tier = _FAST_TIERS[arg.lower()]
-            overrides = {k: v for k, v in (getattr(agent, "request_overrides", {}) or {}).items()
-                         if k not in ("service_tier", "speed")}
-            agent.service_tier = tier
-            if tier == "priority":
+        words = arg.lower().split()
+        global_scope = "--global" in words
+        mode = next((word for word in words if not word.startswith("--")), "")
+        if mode in _FAST_TIERS:
+            tier = _FAST_TIERS[mode]
+            from agent.fast_mode import STATIC_TIERS
+
+            resolved = None
+            if tier in STATIC_TIERS:
                 from hermes_cli.models import resolve_fast_mode_overrides
                 try:
                     resolved = resolve_fast_mode_overrides(
                         getattr(agent, "model", None), provider=getattr(agent, "provider", None),
-                        base_url=getattr(agent, "base_url", None))
+                        base_url=getattr(agent, "base_url", None), tier=tier)
+                    if tier == "ultrafast" and resolved is not None:
+                        from agent.codex_service_tiers import ultrafast_offered
+                        if not ultrafast_offered(
+                            getattr(agent, "model", None), provider=getattr(agent, "provider", None),
+                            base_url=getattr(agent, "base_url", None),
+                            access_token=getattr(agent, "api_key", None)):
+                            resolved = None
                 except Exception:
+                    logger.debug("fast-tier override resolution failed", exc_info=True)
                     resolved = None
-                overrides.update(resolved or {})
+                # slash.exec mirrors even a worker's textual refusal; don't let a rejected
+                # choice erase the previously accepted tier or its request overrides.
+                if resolved is None:
+                    _emit("session.info", sid, _session_info(agent, session))
+                    return
+            if global_scope:
+                session.pop("create_service_tier_override", None)
+            else:
+                session["create_service_tier_override"] = "" if tier is None else tier
+            overrides = {k: v for k, v in (getattr(agent, "request_overrides", {}) or {}).items()
+                         if k not in ("service_tier", "speed")}
+            agent.service_tier = tier
+            overrides.update(resolved or {})
             agent.request_overrides = overrides
+            _persist_live_session_runtime(session)
         _emit("session.info", sid, _session_info(agent, session))
 
 

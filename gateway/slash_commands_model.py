@@ -30,6 +30,7 @@ _FAST_SELECTIONS = {
     "auto": ("auto", "auto", None),
     "cold": ("cold", "cold", None),
     "ultrafast": ("ultrafast", "ultrafast", None),
+    "flex": ("flex", "flex", None),
 }
 
 
@@ -842,6 +843,8 @@ class GatewayModelCommandsMixin:
         if not _fast_route_supports(model, runtime):
             return t("gateway.fast.not_supported")
         args = FAST_ARG_ALIASES.get(args, args)
+        if args == "flex" and not _fast_route_supports(model, runtime, tier="flex"):
+            return t("gateway.fast.not_supported")
         from agent.codex_service_tiers import ultrafast_offered
         ultrafast = ultrafast_offered(model, provider=runtime.get("provider"), base_url=runtime.get("base_url"),
                                       access_token=runtime.get("api_key"))
@@ -861,7 +864,9 @@ class GatewayModelCommandsMixin:
             title=t("gateway.fast.picker_title", mode=status),
             choices=[
                 {"value": v, "label": t(f"gateway.fast.choice_{v}"), "is_current": mode == v}
-                for v in ("fast", "normal", "auto", "cold", *(("ultrafast",) if ultrafast else ()))
+                for v in ("fast", "normal", "auto", "cold",
+                          *(("ultrafast",) if ultrafast else ()),
+                          *(("flex",) if _fast_route_supports(model, runtime, tier="flex") else ()))
             ],
             on_choice_selected=_on_fast_choice,
         )

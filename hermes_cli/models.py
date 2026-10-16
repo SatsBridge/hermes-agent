@@ -1233,41 +1233,16 @@ def _strip_vendor_prefix(model_id: str) -> str:
     return raw.split("/", 1)[1] if "/" in raw else raw
 
 
-def _is_google_service_tier_model(model_id: Optional[str]) -> bool:
-    """Return True if the model accepts Gemini's ``service_tier`` request field.
-
-    Gemini exposes both tiers on ``generateContent`` as a top-level body field:
-    ``flex`` (https://ai.google.dev/gemini-api/docs/flex-inference) and
-    ``priority``
-    (https://ai.google.dev/gemini-api/docs/generate-content/priority-inference).
-    Both docs list the same ``gemini-2.5+`` family, so match ``gemini-*`` by
-    pattern rather than pinning a version list that goes stale each release.
-    """
-    # Two-level aggregator ids ('openrouter/google/gemini-x') deliberately do
-    # NOT match — same reasoning as the OpenAI check. Gemma/Lyria are also not
-    # matched: service tiers apply to Gemini only.
-    base = _strip_vendor_prefix(str(model_id or "")).split(":")[0]
-    match = re.match(r"gemini-(\d+)(?:\.(\d+))?", base)
-    if not match:
-        return False
-    # Both tier docs list gemini-2.5 and newer. Gemini's native REST rejects
-    # the entire request on an unexpected body field, so sending service_tier
-    # to 1.5/2.0 would hard-fail every call for a globally-configured tier —
-    # gate on version rather than matching gemini-* broadly.
-    major = int(match.group(1))
-    minor = int(match.group(2) or 0)
-    return (major, minor) >= (2, 5)
-
-
 def model_supports_fast_mode(model_id: Optional[str]) -> bool:
     """Return whether Hermes should expose the /fast toggle for this model."""
     from agent.model_metadata import is_grok_46_family
+    from hermes_cli.fast_mode_models import is_google_service_tier_model
 
     return (
         _is_anthropic_fast_model(model_id)
         or _is_openai_fast_model(model_id)
         or is_grok_46_family(str(model_id or ""))
-        or _is_google_service_tier_model(model_id))
+        or is_google_service_tier_model(model_id))
 
 
 def _is_anthropic_fast_model(model_id: Optional[str]) -> bool:
@@ -1276,31 +1251,6 @@ def _is_anthropic_fast_model(model_id: Optional[str]) -> bool:
     from agent.model_metadata import is_anthropic_fast_mode_model
 
     return is_anthropic_fast_mode_model(model_id)
-
-
-def _fast_mode_route_supported(
-    model_id: Optional[str], provider: Optional[str], base_url: Optional[str]) -> bool:
-    """Only the first-party endpoint that bills for fast mode may receive its params."""
-    from urllib.parse import urlparse
-
-    from agent.model_metadata import is_grok_46_family
-
-    if _is_anthropic_fast_model(model_id):
-        allowed = {"anthropic": "api.anthropic.com"}
-    elif is_grok_46_family(str(model_id or "")):
-        allowed = {"xai": "api.x.ai"}
-    elif _is_google_service_tier_model(model_id):
-        allowed = {"gemini": "generativelanguage.googleapis.com"}
-    else:
-        allowed = {
-            "openai": "api.openai.com",
-            "openai-api": "api.openai.com",
-            "openai-codex": "chatgpt.com",
-        }
-    if provider and normalize_provider(provider) not in allowed:
-        return False
-    host = (urlparse(str(base_url or "")).hostname or "").lower()
-    return not host or host in allowed.values()
 
 
 def model_supports_ultrafast(model_id: Optional[str]) -> bool:
@@ -1323,12 +1273,15 @@ def resolve_fast_mode_overrides(
     tier-eligible Gemini models (a top-level ``generateContent`` field there), None on Anthropic
     (no flex equivalent — ``speed`` is a go-faster knob, so mapping flex onto it would silently
     bill MORE for a setting chosen to cost less) and on Grok (xAI publishes no flex tier).
-    With ``provider``/``base_url`` the route is gated too (``_fast_mode_route_supported``) so proxies
+    With ``provider``/``base_url`` the route is gated too (``fast_mode_route_supported``) so proxies
     never see the params. Single fast-mode gate for ``/fast`` and ``agent.fast_mode`` windows."""
     if not model_supports_fast_mode(model_id):
         return None
-    if (provider or base_url) and not _fast_mode_route_supported(model_id, provider, base_url):
-        return None
+    if provider or base_url:
+        from hermes_cli.fast_mode_models import fast_mode_route_supported
+
+        if not fast_mode_route_supported(model_id, provider, base_url):
+            return None
     if tier == "ultrafast":
         return {"service_tier": "ultrafast"} if model_supports_ultrafast(model_id) else None
     if tier == "flex":

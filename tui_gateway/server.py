@@ -2703,6 +2703,7 @@ def _make_agent(
                                          access_token=runtime.get("api_key")):
                     _tier_overrides = None
         except Exception:
+            logger.debug("could not resolve configured service tier for TUI agent build", exc_info=True)
             _tier_overrides = None
     agent = AIAgent(
         model=model, max_iterations=_cfg_max_turns(cfg, 500), provider=runtime.get("provider"),

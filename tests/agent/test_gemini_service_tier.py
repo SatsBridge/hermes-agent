@@ -95,6 +95,38 @@ def test_build_gemini_request_drops_unsupported_tier_values():
     assert "service_tier" not in request
 
 
+def test_switched_openai_ultrafast_is_dropped_by_gemini_wire_adapter():
+    """A stale OpenAI pin survives /model; Gemini must drop it at the wire boundary."""
+    from types import SimpleNamespace
+
+    from agent.agent_runtime_helpers import _apply_switched_provider_request_overrides
+    from agent.gemini_native_adapter import GeminiNativeClient
+
+    agent = SimpleNamespace(
+        model="gemini-2.5-flash",
+        base_url="https://generativelanguage.googleapis.com/v1beta",
+        request_overrides={"service_tier": "ultrafast"},
+        _custom_providers=[],
+    )
+    _apply_switched_provider_request_overrides(agent, "gemini")
+    posted = {}
+
+    class _HTTP:
+        def post(self, url, json=None, headers=None, timeout=None):
+            posted["body"] = json
+            return DummyResponse(payload={"candidates": [{"content": {"parts": [{"text": "ok"}]}}]})
+
+    client = GeminiNativeClient(api_key="test-key", http_client=_HTTP())
+    client._create_chat_completion(
+        model=agent.model,
+        messages=[{"role": "user", "content": "hi"}],
+        service_tier=agent.request_overrides["service_tier"],
+    )
+
+    assert agent.request_overrides["service_tier"] == "ultrafast"
+    assert "service_tier" not in posted["body"]
+
+
 def test_native_client_sends_service_tier_on_the_wire(monkeypatch):
     """End-to-end: the tier must appear in the posted generateContent body."""
     from agent.gemini_native_adapter import GeminiNativeClient

@@ -180,6 +180,44 @@ async def test_session_fast_override_beats_config_default(monkeypatch, tmp_path)
     assert runner._resolve_session_service_tier(session_key="other-session") == "priority"
 
 
+@pytest.mark.asyncio
+async def test_fast_flex_is_accepted_on_supported_openai_route(monkeypatch, tmp_path):
+    runner = _make_runner()
+    event = _make_event("/fast flex")
+    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+    monkeypatch.setattr(gateway_run, "_load_gateway_config", dict)
+    monkeypatch.setattr(gateway_run, "_resolve_gateway_model", lambda config=None: "gpt-4.1")
+    monkeypatch.setattr(
+        runner, "_resolve_session_agent_runtime",
+        lambda **_kwargs: ("gpt-4.1", {"provider": "openai", "base_url": "https://api.openai.com/v1"}),
+    )
+    monkeypatch.setattr(runner, "_try_send_choice_picker", AsyncMock(return_value=False))
+
+    await runner._handle_fast_command(event)
+
+    key = runner._session_key_for_source(event.source)
+    assert runner._resolve_session_service_tier(session_key=key) == "flex"
+
+
+@pytest.mark.asyncio
+async def test_fast_flex_is_refused_on_aggregator_route(monkeypatch, tmp_path):
+    runner = _make_runner()
+    event = _make_event("/fast flex")
+    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+    monkeypatch.setattr(gateway_run, "_load_gateway_config", dict)
+    monkeypatch.setattr(gateway_run, "_resolve_gateway_model", lambda config=None: "gpt-4.1")
+    monkeypatch.setattr(
+        runner, "_resolve_session_agent_runtime",
+        lambda **_kwargs: ("gpt-4.1", {"provider": "openrouter", "base_url": "https://openrouter.ai/api/v1"}),
+    )
+
+    response = await runner._handle_fast_command(event)
+
+    key = runner._session_key_for_source(event.source)
+    assert response
+    assert key not in runner._session_service_tier_overrides
+
+
 _ASTRA_ON_CODEX = {"model": "gpt-6-astra", "provider": "openai-codex",
                    "base_url": "https://chatgpt.com/backend-api/codex", "api_key": "***"}
 _GPT_ON_OPENROUTER = {"model": "openai/gpt-5.4", "provider": "openrouter",
@@ -275,7 +313,7 @@ def test_turn_route_injects_flex_without_changing_runtime():
 def test_turn_route_gates_flex_off_aggregator_routes():
     """First-party tier params never ride aggregator routes: OpenRouter strips
     ``service_tier`` (charging nothing) or 400s on it, so the route gate
-    (``_fast_mode_route_supported``) drops the override instead of pinning it."""
+    (``fast_mode_route_supported``) drops the override instead of pinning it."""
     runner = _make_runner()
     runner._service_tier = "flex"
     runtime_kwargs = {
