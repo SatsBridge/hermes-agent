@@ -10,6 +10,7 @@ import pytest
 from tui_gateway import server
 from tui_gateway.compute_host import ComputeHost
 from tui_gateway.host_supervisor import HostSupervisor
+from agent.fast_mode import begin_turn, effective_request_overrides
 
 
 class _StaleWorker:
@@ -173,7 +174,7 @@ def test_compute_host_fast_global_persists_config_and_reports_scope(monkeypatch,
     import yaml
     assert yaml.safe_load(config_path.read_text(encoding="utf-8")) == {"agent": {"service_tier": "flex"}}
     assert "global" in ack["output"].lower()
-    assert "create_service_tier_override" not in session
+    assert session.get("create_service_tier_override") is None
     assert agent.service_tier == "flex"
 
 
@@ -328,3 +329,126 @@ def test_lazy_fast_pin_is_used_when_compute_host_builds_first_agent(monkeypatch)
     host._build_server_session(_Server, frame, "sid-fast")
 
     assert captured["service_tier_override"] == ""
+
+
+def _build_real_host_session(monkeypatch, frame, *, model="gpt-5.4", provider="openrouter",
+                             base_url="https://openrouter.ai/api/v1"):
+    sessions = {}
+
+    def make_agent(*_args, **kwargs):
+        tier = kwargs.get("service_tier_override")
+        agent = _agent(tier=tier or None, model=model, provider=provider, base_url=base_url)
+        agent._service_tier_session_pinned = tier is not None
+        return agent
+
+    class _Server:
+        _sessions = sessions
+        _make_agent = staticmethod(make_agent)
+        _transfer_db_to_agent = staticmethod(lambda *_args: False)
+        _init_session = staticmethod(server._init_session)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(server, "_sessions", sessions)
+        for name in ("_session_todo_state", "_hydrate_session_cwd", "_register_session_cwd",
+                     "_wire_session_agent", "_start_session_services", "_emit",
+                     "_schedule_mcp_late_refresh"):
+            scoped.setattr(server, name, lambda *_args, **_kwargs: None)
+        scoped.setattr("tui_gateway.transport.bind_transport", lambda *_args: None)
+        scoped.setattr("tui_gateway.transport.reset_transport", lambda *_args: None)
+        host = ComputeHost.__new__(ComputeHost)
+        host._transport = object()
+        session = host._build_server_session(_Server, frame, "sid-fast")
+    return session
+
+
+@pytest.mark.parametrize("pin,expected", [
+    ("", {}),
+    ("flex", {"service_tier": "flex"}),
+    ("auto", {"service_tier": "priority"}),
+    ("cold", {"service_tier": "priority"}),
+])
+def test_bootstrapped_pin_survives_status_and_replacement_host(monkeypatch, pin, expected):
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: {"agent": {"service_tier": "priority"}})
+    parent = {"agent": None, "session_key": "pin-key", "history": [],
+              "history_lock": threading.RLock(), "create_service_tier_override": pin,
+              "_compute_host_active": True}
+    child = _build_real_host_session(monkeypatch, server._compute_host_turn_frame(
+        "rid", "sid-fast", parent, "first turn"))
+
+    status = _host_ack(monkeypatch, child, "/fast status")
+    server._apply_compute_host_metadata_mirror(parent, status)
+    replacement = _build_real_host_session(monkeypatch, server._compute_host_turn_frame(
+        "rid", "sid-fast", parent, "replacement turn"))
+    if pin in {"auto", "cold"}:
+        begin_turn(replacement["agent"], [])
+
+    assert parent.get("create_service_tier_override") == pin
+    assert effective_request_overrides(replacement["agent"]) == expected
+
+
+def test_global_unpin_and_failed_save_pin_survive_replacement_host(monkeypatch):
+    config = {"agent": {"service_tier": "priority"}}
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: config)
+    monkeypatch.setattr(server, "_persist_live_session_runtime", lambda _session: None)
+    monkeypatch.setattr(server, "_emit", lambda *_args, **_kwargs: None)
+    parent = {"agent": None, "session_key": "pin-key", "history": [],
+              "history_lock": threading.RLock(), "create_service_tier_override": "priority",
+              "_compute_host_active": True}
+    child = _build_real_host_session(monkeypatch, server._compute_host_turn_frame(
+        "rid", "sid-fast", parent, "first turn"))
+    monkeypatch.setattr(server, "_write_config_key", lambda _key, value: config["agent"].__setitem__("service_tier", value))
+
+    unpinned = _host_ack(monkeypatch, child, "/fast normal --global")
+    server._apply_compute_host_metadata_mirror(parent, unpinned)
+    replacement = _build_real_host_session(monkeypatch, server._compute_host_turn_frame(
+        "rid", "sid-fast", parent, "replacement turn"))
+    assert effective_request_overrides(replacement["agent"]) == {}
+    assert replacement["create_service_tier_override"] is None
+
+    child = _build_real_host_session(monkeypatch, server._compute_host_turn_frame(
+        "rid", "sid-fast", parent, "next turn"))
+
+    def fail_save(*_args):
+        raise OSError("read-only config")
+
+    monkeypatch.setattr(server, "_write_config_key", fail_save)
+    failed_save = _host_ack(monkeypatch, child, "/fast flex --global")
+    server._apply_compute_host_metadata_mirror(parent, failed_save)
+    replacement = _build_real_host_session(monkeypatch, server._compute_host_turn_frame(
+        "rid", "sid-fast", parent, "replacement turn"))
+
+    assert "session only" in failed_save["output"].lower()
+    assert parent["create_service_tier_override"] == "flex"
+    assert effective_request_overrides(replacement["agent"]) == {"service_tier": "flex"}
+
+
+def test_refused_control_ack_does_not_clear_bootstrapped_pin(monkeypatch):
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: {"agent": {"service_tier": "priority"}})
+    parent = {"agent": None, "session_key": "pin-key", "history": [],
+              "history_lock": threading.RLock(), "create_service_tier_override": "priority",
+              "_compute_host_active": True}
+    child = _build_real_host_session(monkeypatch, server._compute_host_turn_frame(
+        "rid", "sid-fast", parent, "first turn"), model="Qwen3.8-27B-UD-Q4_K_M",
+        provider="llamacpp", base_url="http://127.0.0.1:18434/v1")
+
+    refusal = _host_ack(monkeypatch, child, "/fast flex --session")
+    server._apply_compute_host_metadata_mirror(parent, refusal)
+    replacement = _build_real_host_session(monkeypatch, server._compute_host_turn_frame(
+        "rid", "sid-fast", parent, "replacement turn"))
+
+    assert "not available" in refusal["output"].lower()
+    assert parent["create_service_tier_override"] == "priority"
+    assert effective_request_overrides(replacement["agent"]) == {"service_tier": "priority"}
+
+
+def test_status_ack_without_initialized_pin_is_not_an_unpin(monkeypatch):
+    parent = {"agent": None, "session_key": "pin-key", "history": [],
+              "history_lock": threading.RLock(), "create_service_tier_override": "priority"}
+    child = {"agent": _agent(tier="flex"), "session_key": "pin-key", "history": [],
+             "history_lock": threading.RLock()}
+
+    status = _host_ack(monkeypatch, child, "/fast status")
+    server._apply_compute_host_metadata_mirror(parent, status)
+
+    assert "service_tier_override" not in status
+    assert parent["create_service_tier_override"] == "priority"

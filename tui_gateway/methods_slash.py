@@ -489,7 +489,7 @@ def _mirror_fast(sid, session, agent, arg) -> str | None:
         except Exception:
             saved = False
     if global_scope and saved:
-        session.pop("create_service_tier_override", None)
+        session["create_service_tier_override"] = None
     else:
         session["create_service_tier_override"] = "" if tier is None else tier
     if agent:

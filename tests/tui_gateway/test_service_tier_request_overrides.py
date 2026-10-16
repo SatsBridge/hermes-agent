@@ -495,7 +495,7 @@ def test_slash_fast_global_unpins_live_agent_and_uses_per_model_resolution(monke
 
     assert load_config_readonly()["agent"]["service_tier"] == "priority"
     assert get_config_path().read_text(encoding="utf-8").startswith("agent:")
-    assert "create_service_tier_override" not in session
+    assert session.get("create_service_tier_override") is None
     assert agent._service_tier_session_pinned is False
     assert fast_mode.effective_request_overrides(agent)["service_tier"] == "flex"
     assert "service_tier_session_pinned" not in server._runtime_model_config(agent)
