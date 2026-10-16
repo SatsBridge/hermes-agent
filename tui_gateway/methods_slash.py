@@ -418,15 +418,31 @@ _FAST_TIERS = {"fast": "priority", "on": "priority", "normal": None, "off": None
                "ultrafast": "ultrafast", "ultra": "ultrafast", "flex": "flex"}
 
 
-def _mirror_fast(sid, session, agent, arg) -> bool:
+def _mirror_fast(sid, session, agent, arg) -> str | None:
     tokens = arg.lower().split()
     from hermes_cli.cli_commands_mixin import _split_scope_flags
     mode, global_scope = _split_scope_flags(arg)
+    if not tokens or tokens == ["status"]:
+        if session.get("create_service_tier_override") is not None:
+            tier = session["create_service_tier_override"] or None
+        elif agent is not None and getattr(agent, "_service_tier_session_pinned", False):
+            tier = getattr(agent, "service_tier", None)
+        else:
+            cfg = _load_cfg()
+            model = getattr(agent, "model", None) if agent is not None else None
+            fallback = getattr(agent, "service_tier", None) if agent is not None else None
+            if not model:
+                model, _runtime = _resolve_agent_model_runtime(
+                    session.get("model_override"), session.get("provider_override"))
+            from hermes_constants import resolve_service_tier_for_model
+            tier = resolve_service_tier_for_model(cfg.get("agent") or {}, model or "", fallback=fallback)
+        from agent.fast_mode import service_tier_word
+        return f"Fast mode: {service_tier_word(tier)}."
     if (not tokens or any(token not in (*_FAST_TIERS, "--global", "--session") for token in tokens)
             or len([token for token in tokens if token not in ("--global", "--session")]) != 1):
-        return False
+        return None
     if mode not in _FAST_TIERS:
-        return False
+        return None
     tier = _FAST_TIERS[mode]
     if agent is not None:
         model = getattr(agent, "model", None)
@@ -438,7 +454,7 @@ def _mirror_fast(sid, session, agent, arg) -> bool:
             session.get("model_override"), session.get("provider_override"))
         provider, base_url, api_key = (runtime.get(k) for k in ("provider", "base_url", "api_key"))
     if not model:
-        return False
+        return "(._.) /fast is not available without a selected model."
     from agent.fast_mode import STATIC_TIERS
     resolved = None
     if tier in STATIC_TIERS:
@@ -453,17 +469,17 @@ def _mirror_fast(sid, session, agent, arg) -> bool:
             logger.debug("fast-tier override resolution failed", exc_info=True)
             resolved = None
         if resolved is None:
-            return False
+            return "(._.) /fast is not available for this model or route/account."
     elif tier in {"auto", "cold"}:
         # Bounded modes only operate on a route that supports fast mode; unlike a
         # static tier they leave per-request tier selection to agent.fast_mode.
         from hermes_cli.models import resolve_service_tier_overrides
         try:
             if resolve_service_tier_overrides(model, "priority", provider=provider, base_url=base_url) is None:
-                return False
+                return "(._.) /fast is not available for this model or route/account."
         except Exception:
             logger.debug("fast-mode route resolution failed", exc_info=True)
-            return False
+            return "(._.) /fast is not available for this model or route/account."
 
     saved = False
     if global_scope:
@@ -487,7 +503,11 @@ def _mirror_fast(sid, session, agent, arg) -> bool:
         set_framework_baked_tier_keys(agent, resolved)
         _persist_live_session_runtime(session)
         _emit("session.info", sid, _session_info(agent, session))
-    return True
+    from agent.fast_mode import service_tier_word
+    mode_name = service_tier_word(tier)
+    if global_scope and not saved:
+        return f"Fast mode set to {mode_name} (global save failed; applied to this session only)."
+    return f"Fast mode set to {mode_name}{' globally' if global_scope else ''}."
 
 
 def apply_fast_slash(sid: str, session: dict, arg: str) -> str | None:
@@ -496,16 +516,21 @@ def apply_fast_slash(sid: str, session: dict, arg: str) -> str | None:
     from hermes_cli.cli_commands_mixin import _split_scope_flags
     mode, _global_scope = _split_scope_flags(arg)
     modes = [token for token in tokens if token not in ("--global", "--session")]
+    if not tokens or tokens == ["status"]:
+        with _session_profile_runtime_scope(session):
+            if _session_uses_compute_host(session):
+                command = "/fast status" if tokens else "/fast"
+                return _compute_host_slash(sid, session, "fast", command)[1]
+            result = _mirror_fast(sid, session, session.get("agent"), arg)
+        return result or "Fast mode status is unavailable."
     if (not tokens or any(token not in (*_FAST_TIERS, "--global", "--session") for token in tokens)
             or len(modes) != 1 or mode not in _FAST_TIERS):
         return None
     with _session_profile_runtime_scope(session):
         if _session_uses_compute_host(session):
             return _compute_host_slash(sid, session, "fast", f"/fast {arg}")[1]
-        accepted = _mirror_fast(sid, session, session.get("agent"), arg)
-    if not accepted:
-        return "(._.) /fast is not available for this model or route/account."
-    return f"Fast mode set to {_FAST_TIERS[mode] or 'normal'}."
+        result = _mirror_fast(sid, session, session.get("agent"), arg)
+    return result or "(._.) /fast is not available for this model or route/account."
 
 
 def _mirror_reload_mcp(sid, session, agent, arg) -> None:
@@ -578,7 +603,7 @@ def _mirror_slash_side_effects(sid: str, session: dict, command: str, output: st
         # profile scope or /model's credential read raises UnscopedSecretError under multiplex (#122655).
         with _session_profile_runtime_scope(session):
             result = mirror(sid, session, agent, arg)
-            return "" if name == "fast" else result or ""
+            return result or ""
     except CompressionBusy as e:  # a turn won the race after the unlocked running check above
         return str(e)
     except Exception as e:
