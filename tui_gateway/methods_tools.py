@@ -1041,6 +1041,13 @@ def _(rid, params: dict) -> dict:
     live_output = _live_slash_command_output(sid, session, base, arg)
     if live_output is not None:
         return _ok(rid, {"output": live_output or "(no output)"})
+    if base == "fast":
+        # The CLI worker has its own profile route and can persist /fast before
+        # the live session mirror runs. Apply valid settings against the live
+        # agent first so a stale worker route cannot change the profile default.
+        output = apply_fast_slash(sid, session, arg)
+        if output is not None:
+            return _ok(rid, {"output": output or "(no output)"})
     if base in _WORKER_BLOCKED_COMMANDS and _is_snapshot_restore(arg):
         return _err(rid, 4018, "snapshot restore mutates live config/state; use command.dispatch for /snapshot restore")
     # Pending-input built-ins route straight to command.dispatch (some clients fail the
