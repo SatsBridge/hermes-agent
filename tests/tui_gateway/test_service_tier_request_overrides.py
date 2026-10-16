@@ -379,7 +379,6 @@ def test_slash_exec_entitled_ultrafast_mirrors_exact_tier(monkeypatch, word):
     [
         ("/fast ultra", "gpt-6-astra", "openai-codex", False),
         ("/fast flex", "unsupported-model", "openai", True),
-        ("/fast flex", "gpt-4.1", "openrouter", True),
     ],
 )
 def test_slash_exec_refusal_keeps_existing_tier_state(monkeypatch, command, model, route, ultrafast_offered):
@@ -425,6 +424,108 @@ def test_slash_exec_rejected_fast_arguments_leave_state_unchanged(monkeypatch, c
     assert response["result"]["output"] == output
     assert agent.service_tier == "priority"
     assert agent.request_overrides == {"service_tier": "priority", "other": "keep"}
+    assert session["create_service_tier_override"] == "priority"
+    assert not persisted
+
+
+def _write_fast_test_config(monkeypatch, tmp_path):
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    (home / "config.yaml").write_text(
+        "agent:\n  service_tier: priority\n  service_tier_overrides:\n    openai/gpt-5: flex\n",
+        encoding="utf-8",
+    )
+
+
+def test_slash_fast_normal_pins_wire_and_resume_over_per_model_tier(monkeypatch, tmp_path):
+    from agent import fast_mode
+
+    _write_fast_test_config(monkeypatch, tmp_path)
+    agent = SimpleNamespace(
+        model="openai/gpt-5", provider="openrouter", base_url="https://openrouter.ai/api/v1",
+        api_key="token", service_tier="flex", request_overrides={"service_tier": "flex"},
+        _service_tier_session_pinned=False,
+    )
+
+    response, _session, persisted = _slash_exec(
+        monkeypatch, agent=agent, command="/fast normal --session", output="(._.) /fast set to NORMAL")
+
+    assert response["result"]["output"].startswith("(._.)")
+    assert agent._service_tier_session_pinned is True
+    assert fast_mode.effective_request_overrides(agent) == {}
+    runtime = server._runtime_model_config(agent)
+    assert runtime["service_tier"] == "normal"
+    assert runtime["service_tier_session_pinned"] is True
+    import json
+    resumed = server._stored_session_runtime_overrides({"model_config": json.dumps(runtime)})
+    assert resumed["service_tier_override"] == ""
+    restored = _build(
+        "priority", model="openai/gpt-5", provider="openrouter", base_url="https://openrouter.ai/api/v1",
+        service_tier_override=resumed["service_tier_override"])
+    restored_agent = SimpleNamespace(
+        model=restored["model"], provider=restored["provider"], base_url=restored["base_url"],
+        api_mode=restored["api_mode"], service_tier=restored["service_tier"],
+        request_overrides=restored["request_overrides"] or {}, _service_tier_session_pinned=True,
+        _framework_baked_tier_keys=restored["agent"]._framework_baked_tier_keys,
+    )
+    assert fast_mode.effective_request_overrides(restored_agent) == {}
+    assert persisted
+
+
+def test_slash_fast_global_unpins_live_agent_and_uses_per_model_resolution(monkeypatch, tmp_path):
+    from agent import fast_mode
+
+    _write_fast_test_config(monkeypatch, tmp_path)
+    agent = SimpleNamespace(
+        model="openai/gpt-5", provider="openrouter", base_url="https://openrouter.ai/api/v1",
+        api_key="token", service_tier="priority", request_overrides={"service_tier": "priority"},
+        _service_tier_session_pinned=True,
+    )
+
+    _, session, persisted = _slash_exec(
+        monkeypatch, agent=agent, command="/fast fast --global", output="fast enabled")
+
+    from hermes_cli.config import get_config_path, load_config_readonly
+
+    assert load_config_readonly()["agent"]["service_tier"] == "priority"
+    assert get_config_path().read_text(encoding="utf-8").startswith("agent:")
+    assert "create_service_tier_override" not in session
+    assert agent._service_tier_session_pinned is False
+    assert fast_mode.effective_request_overrides(agent)["service_tier"] == "flex"
+    assert "service_tier_session_pinned" not in server._runtime_model_config(agent)
+    assert persisted
+
+
+@pytest.mark.parametrize("command,model,provider,base_url,output", [
+    ("/fast flex --global", "gpt-5.4", "openai", "https://proxy.example/v1",
+     "(._.) /fast is only available for supported models/routes."),
+    ("/fast ultra --global", "gpt-6-astra", "openai-codex", "https://chatgpt.com/backend-api/codex",
+     "(._.) Ultrafast is not available for this account."),
+])
+def test_slash_fast_real_refusal_text_does_not_mutate_global_or_session(
+        monkeypatch, command, model, provider, base_url, output):
+    if command.startswith("/fast ultra"):
+        import agent.codex_service_tiers as codex_tiers
+        from hermes_cli import models
+        monkeypatch.setattr(models, "resolve_service_tier_overrides", lambda *a, **k: {"service_tier": "ultrafast"})
+        monkeypatch.setattr(codex_tiers, "ultrafast_offered", lambda *a, **k: False)
+    writes = []
+    monkeypatch.setattr(server, "_write_config_key", lambda *args: writes.append(args))
+    agent = SimpleNamespace(
+        model=model, provider=provider, base_url=base_url, api_key="token",
+        service_tier="priority", request_overrides={"service_tier": "priority", "extra_body": {"keep": 1}},
+        _service_tier_session_pinned=True,
+    )
+
+    response, session, persisted = _slash_exec(
+        monkeypatch, agent=agent, command=command, output=output)
+
+    assert response["result"]["output"] == output
+    assert writes == []
+    assert agent.service_tier == "priority"
+    assert agent.request_overrides == {"service_tier": "priority", "extra_body": {"keep": 1}}
+    assert agent._service_tier_session_pinned is True
     assert session["create_service_tier_override"] == "priority"
     assert not persisted
 

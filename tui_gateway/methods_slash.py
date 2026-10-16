@@ -420,65 +420,62 @@ _FAST_TIERS = {"fast": "priority", "on": "priority", "normal": None, "off": None
 
 def _mirror_fast(sid, session, agent, arg) -> None:
     tokens = arg.lower().split()
-    persist_global = "--global" in tokens
-    words = [t for t in tokens if t not in ("--global", "--session")]
-    if not words:
+    from hermes_cli.cli_commands_mixin import _split_scope_flags
+    mode, global_scope = _split_scope_flags(arg)
+    if (not tokens or any(token not in (*_FAST_TIERS, "--global", "--session") for token in tokens)
+            or len([token for token in tokens if token not in ("--global", "--session")]) != 1):
         return
-    word = words[0]
-    if word not in _FAST_TIERS:
+    if mode not in _FAST_TIERS:
         return
-    tier = _FAST_TIERS[word]
-    saved = False
-    if persist_global:
+    tier = _FAST_TIERS[mode]
+    if agent is not None:
+        model = getattr(agent, "model", None)
+        provider = getattr(agent, "provider", None)
+        base_url = getattr(agent, "base_url", None)
+        api_key = getattr(agent, "api_key", None)
+    else:
+        model, runtime = _resolve_agent_model_runtime(
+            session.get("model_override"), session.get("provider_override"))
+        provider, base_url, api_key = (runtime.get(k) for k in ("provider", "base_url", "api_key"))
+    if not model:
+        return
+    from agent.fast_mode import STATIC_TIERS
+    resolved = None
+    if tier in STATIC_TIERS:
+        from hermes_cli.models import resolve_service_tier_overrides
         try:
-            _write_config_key("agent.service_tier", _FAST_SAVED[tier])
+            resolved = resolve_service_tier_overrides(model, tier, provider=provider, base_url=base_url)
+            if tier == "ultrafast" and resolved is not None:
+                from agent.codex_service_tiers import ultrafast_offered
+                if not ultrafast_offered(model, provider=provider, base_url=base_url, access_token=api_key):
+                    resolved = None
+        except Exception:
+            logger.debug("fast-tier override resolution failed", exc_info=True)
+            resolved = None
+        if resolved is None:
+            return
+
+    saved = False
+    if global_scope:
+        try:
+            _write_config_key("agent.service_tier", "normal" if tier is None else tier)
             saved = True
         except Exception:
             saved = False
-    # * Successful --global persist unpins so per-model overlays apply again (CLI parity).
-    if persist_global and saved:
+    if global_scope and saved:
         session.pop("create_service_tier_override", None)
     else:
         session["create_service_tier_override"] = "" if tier is None else tier
     if agent:
-        from hermes_cli.cli_commands_mixin import _split_scope_flags
-        mode, global_scope = _split_scope_flags(arg)
-        if mode in _FAST_TIERS:
-            tier = _FAST_TIERS[mode]
-            from agent.fast_mode import STATIC_TIERS
-
-            resolved = None
-            if tier in STATIC_TIERS:
-                from hermes_cli.models import resolve_service_tier_overrides
-                try:
-                    resolved = resolve_service_tier_overrides(
-                        getattr(agent, "model", None), tier, provider=getattr(agent, "provider", None),
-                        base_url=getattr(agent, "base_url", None))
-                    if tier == "ultrafast" and resolved is not None:
-                        from agent.codex_service_tiers import ultrafast_offered
-                        if not ultrafast_offered(
-                            getattr(agent, "model", None), provider=getattr(agent, "provider", None),
-                            base_url=getattr(agent, "base_url", None),
-                            access_token=getattr(agent, "api_key", None)):
-                            resolved = None
-                except Exception:
-                    logger.debug("fast-tier override resolution failed", exc_info=True)
-                    resolved = None
-                # slash.exec mirrors even a worker's textual refusal; don't let a rejected
-                # choice erase the previously accepted tier or its request overrides.
-                if resolved is None:
-                    _emit("session.info", sid, _session_info(agent, session))
-                    return
-            if global_scope:
-                session.pop("create_service_tier_override", None)
-            else:
-                session["create_service_tier_override"] = "" if tier is None else tier
-            overrides = {k: v for k, v in (getattr(agent, "request_overrides", {}) or {}).items()
-                         if k not in ("service_tier", "speed")}
-            agent.service_tier = tier
-            overrides.update(resolved or {})
-            agent.request_overrides = overrides
-            _persist_live_session_runtime(session)
+        overrides = {k: v for k, v in (getattr(agent, "request_overrides", {}) or {}).items()
+                     if k not in ("service_tier", "speed")}
+        agent.service_tier = tier
+        overrides.update(resolved or {})
+        agent.request_overrides = overrides
+        agent._service_tier_session_pinned = not (global_scope and saved)
+        from agent.fast_mode import set_framework_baked_tier_keys
+        set_framework_baked_tier_keys(agent, resolved)
+        _persist_live_session_runtime(session)
         _emit("session.info", sid, _session_info(agent, session))
 
 
@@ -539,8 +536,7 @@ def _mirror_slash_side_effects(sid: str, session: dict, command: str, output: st
     name, arg, agent = parts[0], (parts[1].strip() if len(parts) > 1 else ""), session.get("agent")
     if name == "compact":  # /compact aliases /compress; the compute-host control forwards the raw alias
         name = "compress"
-    if name == "fast" and output and output.startswith(("Unknown argument:", "not available for this model/account/route")):
-        return ""
+
     if name in _MUTATES_WHILE_RUNNING:
         if _session_uses_compute_host(session):
             return _compute_host_slash(sid, session, name, command)[1]
