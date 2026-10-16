@@ -68,8 +68,8 @@ def test_desktop_surfaces_carry_the_exact_tier_ultrafast_is_never_plain_fast():
         assert caps[model]["fast"] and caps[model].get("ultrafast"), model
     assert caps["gpt-6-sol"]["fast"] and not caps["gpt-6-sol"].get("ultrafast")
     assert caps["gpt-daybreak-blue-latest-900k"]["fast"] and not caps["gpt-daybreak-blue-latest-900k"].get("ultrafast")
-    assert not caps["openai/gpt-6-astra"]["fast"] and not caps["openai/gpt-6-astra"].get("ultrafast")  # proxy route
-    assert not caps["openai/gpt-6.1-sol"]["fast"] and not caps["openai/gpt-6.1-sol"].get("ultrafast")
+    assert caps["openai/gpt-6-astra"]["fast"] and not caps["openai/gpt-6-astra"].get("ultrafast")
+    assert caps["openai/gpt-6.1-sol"]["fast"] and not caps["openai/gpt-6.1-sol"].get("ultrafast")
     for params, tier in (({"fast": True, "service_tier": "ultrafast"}, "ultrafast"),
                          ({"fast": True, "service_tier": "normal"}, ""), ({"fast": True}, "priority"), ({}, None)):
         assert create_overrides(params)[2] == tier, params
@@ -159,7 +159,11 @@ def test_sol_ultrafast_codex_request_uses_the_wire_slug_and_keeps_subscription_a
     base_url = "https://chatgpt.com/backend-api/codex"
     runtime_model = normalize_model_for_provider(model, "openai-codex")
     overrides = resolve_fast_mode_overrides(runtime_model, provider="openai-codex", base_url=base_url, tier="ultrafast")
-    agent = SimpleNamespace(service_tier="ultrafast", request_overrides=overrides)
+    agent = SimpleNamespace(
+        service_tier="ultrafast", request_overrides=overrides, model=runtime_model,
+        provider="openai-codex", base_url=base_url, api_mode="codex_responses",
+        _service_tier_session_pinned=True,
+    )
     transport = ResponsesApiTransport()
     kwargs = transport.build_kwargs(
         runtime_model, [{"role": "user", "content": "hi"}], provider="openai-codex", base_url=base_url,

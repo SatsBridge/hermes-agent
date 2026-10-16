@@ -1067,7 +1067,7 @@ def _resolve_review_provider() -> tuple:
     overrides, provider, model_name, binding = {}, None, "", None
     try:
         from hermes_cli.config import load_config_readonly
-        from hermes_cli.models import apply_aux_service_tier_overrides
+        from hermes_cli.models import apply_aux_service_tier_overrides, bind_aux_slot_service_tier
         from hermes_cli.runtime_provider import resolve_runtime_provider
         cfg = load_config_readonly()
         binding = _resolve_review_runtime(cfg)
@@ -1102,6 +1102,7 @@ def _run_llm_review(prompt: str) -> dict[str, Any]:
     result_meta: dict[str, Any] = _llm_meta("")
     try:
         from run_agent import AIAgent
+        from hermes_cli.models import bind_aux_slot_service_tier
     except Exception as e:
         result_meta["error"] = result_meta["summary"] = f"AIAgent import failed: {e}"
         return result_meta

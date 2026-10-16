@@ -57,18 +57,15 @@ def escalation_base_tier(agent: Any):
     raw ``request_overrides.service_tier`` (flex/priority) is the starting
     rung so enabling escalation does not strip it before any observation.
     """
-    try:
-        from agent.fast_mode import logical_service_tier_source
+    from agent.fast_mode import logical_service_tier_source
 
-        mode, configured = logical_service_tier_source(agent)
-        if configured:
-            return mode
-        raw = parse_service_tier(
-            (getattr(agent, "request_overrides", None) or {}).get("service_tier")
-        )
-        return raw if raw in _WIRE_TIERS else None
-    except Exception:
-        return parse_service_tier(getattr(agent, "service_tier", None))
+    mode, configured = logical_service_tier_source(agent)
+    if configured:
+        return mode
+    raw = parse_service_tier(
+        (getattr(agent, "request_overrides", None) or {}).get("service_tier")
+    )
+    return raw if raw in _WIRE_TIERS else None
 
 
 def _logical_base_tier(agent: Any):
@@ -231,17 +228,14 @@ def _climb_from(base_tier: str | None, rungs: int) -> str | None:
 
 def _openrouter_service_tier_route(agent: Any) -> bool:
     """Same OpenRouter predicate used when overlaying ``service_tier`` on the wire."""
-    try:
-        from hermes_cli.models import _is_openrouter_service_tier_route
+    from hermes_cli.models import _is_openrouter_service_tier_route
 
-        return bool(
-            _is_openrouter_service_tier_route(
-                getattr(agent, "provider", None),
-                getattr(agent, "base_url", None),
-            )
+    return bool(
+        _is_openrouter_service_tier_route(
+            getattr(agent, "provider", None),
+            getattr(agent, "base_url", None),
         )
-    except Exception:
-        return False
+    )
 
 
 def _surface_blocks_escalation(agent: Any) -> bool:

@@ -478,11 +478,11 @@ def _mirror_fast(sid, session, agent, arg) -> None:
 
             resolved = None
             if tier in STATIC_TIERS:
-                from hermes_cli.models import resolve_fast_mode_overrides
+                from hermes_cli.models import resolve_service_tier_overrides
                 try:
-                    resolved = resolve_fast_mode_overrides(
-                        getattr(agent, "model", None), provider=getattr(agent, "provider", None),
-                        base_url=getattr(agent, "base_url", None), tier=tier)
+                    resolved = resolve_service_tier_overrides(
+                        getattr(agent, "model", None), tier, provider=getattr(agent, "provider", None),
+                        base_url=getattr(agent, "base_url", None))
                     if tier == "ultrafast" and resolved is not None:
                         from agent.codex_service_tiers import ultrafast_offered
                         if not ultrafast_offered(
@@ -572,7 +572,7 @@ def _compute_host_slash(sid: str, session: dict, name: str, command: str) -> tup
     return "ok", str(ack.get("output") or "")
 
 
-def _mirror_slash_side_effects(sid: str, session: dict, command: str) -> str:
+def _mirror_slash_side_effects(sid: str, session: dict, command: str, output: str | None = None) -> str:
     """Apply side effects that must also hit the gateway's live agent."""
     parts = command.lstrip("/").split(None, 1)
     if not parts:
@@ -580,6 +580,8 @@ def _mirror_slash_side_effects(sid: str, session: dict, command: str) -> str:
     name, arg, agent = parts[0], (parts[1].strip() if len(parts) > 1 else ""), session.get("agent")
     if name == "compact":  # /compact aliases /compress; the compute-host control forwards the raw alias
         name = "compress"
+    if name == "fast" and output and output.startswith(("Unknown argument:", "not available for this model/account/route")):
+        return ""
     if name in _MUTATES_WHILE_RUNNING:
         if _session_uses_compute_host(session):
             return _compute_host_slash(sid, session, name, command)[1]

@@ -391,7 +391,24 @@ def _sync_agent_fallback_with_config(sid: str, session: dict) -> None:
     GatewayRunner._apply_fallback_chain_to_agent(agent, chain)
 
 
-def _background_agent_kwargs(agent, task_id: str) -> dict:
+def _background_tier_snapshot(parent) -> dict:
+    """Capture session tier intent and its wire overrides once before a background build."""
+    from agent.fast_mode import TIER_WIRE_KEYS
+
+    pinned = getattr(parent, "_service_tier_session_pinned", False) is True
+    parent_tier = getattr(parent, "service_tier", None)
+    overrides = dict(getattr(parent, "request_overrides", None) or {})
+    baked = getattr(parent, "_framework_baked_tier_keys", None) or ()
+    mapped = {key: overrides[key] for key in TIER_WIRE_KEYS if key in baked and key in overrides}
+    return {
+        "service_tier": parent_tier if pinned else (parent_tier or _load_service_tier()),
+        "pinned": pinned,
+        "framework_baked_tier_keys": mapped or None,
+        "request_overrides": overrides,
+    }
+
+
+def _background_agent_kwargs(agent, task_id: str, snap=None) -> dict:
     cfg = _load_cfg()
 
     def g(name, default=None):
@@ -417,8 +434,8 @@ def _background_agent_kwargs(agent, task_id: str) -> dict:
         "quiet_mode": True, "verbose_logging": False,
         "provider_require_parameters": g("provider_require_parameters", False), "session_id": task_id,
         "reasoning_config": g("reasoning_config") or _load_reasoning_config(str(g("model", "") or "")),
-        "service_tier": g("service_tier") or _load_service_tier(),
-        "request_overrides": dict(g("request_overrides", {}) or {}),
+        "service_tier": snap["service_tier"],
+        "request_overrides": dict(snap.get("request_overrides") or {}),
         # The side agent persists into the PARENT's store: a named-profile chat's ``bg_*`` rows
         # belong to that profile's state.db, not the launch handle.
         "platform": "tui", "session_db": getattr(agent, "_session_db", None) or _get_db(), "fallback_model": fallback,

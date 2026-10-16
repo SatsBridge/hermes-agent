@@ -201,7 +201,7 @@ async def test_fast_flex_is_accepted_on_supported_openai_route(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
-async def test_fast_flex_is_refused_on_aggregator_route(monkeypatch, tmp_path):
+async def test_fast_flex_is_accepted_on_openrouter_route(monkeypatch, tmp_path):
     runner = _make_runner()
     event = _make_event("/fast flex")
     monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
@@ -216,7 +216,10 @@ async def test_fast_flex_is_refused_on_aggregator_route(monkeypatch, tmp_path):
 
     key = runner._session_key_for_source(event.source)
     assert response
-    assert key not in runner._session_service_tier_overrides
+    assert runner._session_service_tier_overrides[key] == "flex"
+    route = runner._resolve_turn_agent_config("hi", "gpt-4.1", {
+        "provider": "openrouter", "base_url": "https://openrouter.ai/api/v1"})
+    assert route["request_overrides"]["service_tier"] == "flex"
 
 
 _ASTRA_ON_CODEX = {"model": "gpt-6-astra", "provider": "openai-codex",
@@ -226,13 +229,12 @@ _GPT_ON_OPENROUTER = {"model": "openai/gpt-5.4", "provider": "openrouter",
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("default_model, override, command, accepted", [
+@pytest.mark.parametrize("default_model, override, command, expected_tier", [
     # #118761: Astra picked with session /model over a default /fast can't serve.
-    ("claude-sonnet-4-6", _ASTRA_ON_CODEX, "/fast ultrafast", True),
-    # Converse: a fast-capable default must not admit a session route whose turns never carry the tier.
-    ("claude-opus-5-5", _GPT_ON_OPENROUTER, "/fast fast", False),
+    ("claude-sonnet-4-6", _ASTRA_ON_CODEX, "/fast ultrafast", "ultrafast"),
+    ("claude-opus-5-5", _GPT_ON_OPENROUTER, "/fast fast", "priority"),
 ])
-async def test_fast_gate_follows_the_session_route(monkeypatch, tmp_path, default_model, override, command, accepted):
+async def test_fast_gate_follows_the_session_route(monkeypatch, tmp_path, default_model, override, command, expected_tier):
     """Real fast-mode tables: /fast accepts exactly the tiers the session's next turn would send."""
     runner = _make_runner()
     event = _make_event(command)
@@ -247,12 +249,8 @@ async def test_fast_gate_follows_the_session_route(monkeypatch, tmp_path, defaul
     tier = runner._resolve_session_service_tier(session_key=session_key)
     model, runtime = runner._resolve_session_agent_runtime(source=event.source)
     route = runner._resolve_turn_agent_config("hi", model, runtime)
-    if accepted:
-        assert tier == "ultrafast" and "only available" not in response
-        assert route["request_overrides"] == {"service_tier": "ultrafast"}
-    else:
-        assert "only available" in response
-        assert session_key not in runner._session_service_tier_overrides
+    assert tier == expected_tier and "only available" not in response
+    assert route["request_overrides"] == {"service_tier": expected_tier}
 
 
 @pytest.mark.asyncio
@@ -311,10 +309,8 @@ def test_turn_route_injects_flex_without_changing_runtime():
     assert route["request_overrides"] == {"service_tier": "flex"}
 
 
-def test_turn_route_gates_flex_off_aggregator_routes():
-    """First-party tier params never ride aggregator routes: OpenRouter strips
-    ``service_tier`` (charging nothing) or 400s on it, so the route gate
-    (``fast_mode_route_supported``) drops the override instead of pinning it."""
+def test_turn_route_enables_flex_for_openrouter():
+    """OpenRouter Flex is route-level and is not constrained by model catalog support."""
     runner = _make_runner()
     runner._service_tier = "flex"
     runtime_kwargs = {
@@ -327,11 +323,10 @@ def test_turn_route_gates_flex_off_aggregator_routes():
         "credential_pool": None,
     }
 
-    # A tier-eligible model id, so it is specifically the ROUTE gate doing the
-    # dropping here — not model eligibility.
+    # A catalog model without first-party fast-mode support still receives the OpenRouter tier.
     route = gateway_run.GatewayRunner._resolve_turn_agent_config(
         runner, "hi", "gpt-4.1", runtime_kwargs
     )
 
     assert route["runtime"]["provider"] == "openrouter"
-    assert not route["request_overrides"]
+    assert route["request_overrides"]["service_tier"] == "flex"

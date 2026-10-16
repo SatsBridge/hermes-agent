@@ -18,6 +18,8 @@ from typing import Any
 
 BOUNDED_MODES = frozenset({"auto", "cold"})
 DEFAULT_WINDOW_SECONDS = 60
+# Wire keys whose values can be framework-baked by a tier selection.
+TIER_WIRE_KEYS = ("service_tier", "speed")
 # Documented fast-mode rate-limit headers; a limit of 0 means the organization has no fast
 # capacity for the model (https://platform.claude.com/docs/en/build-with-claude/fast-mode).
 _FAST_LIMIT_HEADERS = ("anthropic-fast-input-tokens-limit", "anthropic-fast-output-tokens-limit")
@@ -198,26 +200,36 @@ def begin_turn(
 
 def _apply_escalation_overlay(agent: Any, overrides: dict[str, Any]) -> dict[str, Any]:
     """Last-step TTFT ladder overlay. No-op when escalation is disabled or gated."""
-    try:
-        from agent.service_tier_escalation import apply_escalation_to_overrides
+    from agent.service_tier_escalation import apply_escalation_to_overrides
 
-        return apply_escalation_to_overrides(agent, overrides)
-    except Exception:
-        return overrides
+    return apply_escalation_to_overrides(agent, overrides)
 
 
 def effective_request_overrides(agent: Any) -> dict[str, Any]:
-    """``agent.request_overrides`` plus the fast override while the window is open, minus
-    ``speed`` for a model this session learned has no fast capacity."""
+    """Resolve framework tier sources onto a copy, preserving unrelated caller overrides."""
     overrides = dict(getattr(agent, "request_overrides", None) or {})
-    if getattr(agent, "service_tier", None) in BOUNDED_MODES and time.monotonic() < getattr(agent, "_fast_until", 0.0):
-        from hermes_cli.models import resolve_fast_mode_overrides
-        base_url = getattr(agent, "base_url", None)
-        if getattr(agent, "api_mode", None) == "anthropic_messages":
-            base_url = getattr(agent, "_anthropic_base_url", None) or base_url
-        overrides.update(
-            resolve_fast_mode_overrides(getattr(agent, "model", None), provider=getattr(agent, "provider", None), base_url=base_url) or {}
-        )
+    for key in TIER_WIRE_KEYS:
+        if key in (getattr(agent, "_framework_baked_tier_keys", None) or ()):
+            overrides.pop(key, None)
+    if not _framework_replaces_tier_keys(agent):
+        return _apply_escalation_overlay(agent, _drop_unprovisioned_speed(agent, overrides))
+    for key in TIER_WIRE_KEYS:
+        overrides.pop(key, None)
+    mode = logical_service_tier(agent)
+    model, provider, base_url = _agent_route(agent)
+    if mode in BOUNDED_MODES:
+        if time.monotonic() < getattr(agent, "_fast_until", 0.0):
+            from hermes_cli.models import resolve_fast_mode_overrides
+
+            overrides.update(resolve_fast_mode_overrides(model, provider=provider, base_url=base_url) or {})
+    else:
+        from hermes_cli.models import resolve_service_tier_overrides
+
+        overrides.update(resolve_service_tier_overrides(model, mode, provider=provider, base_url=base_url) or {})
+    return _apply_escalation_overlay(agent, _drop_unprovisioned_speed(agent, overrides))
+
+
+def _drop_unprovisioned_speed(agent: Any, overrides: dict[str, Any]) -> dict[str, Any]:
     if "speed" in overrides and getattr(agent, "model", None) in (getattr(agent, "_fast_mode_unavailable_models", None) or ()):
         overrides.pop("speed", None)
     from agent.codex_service_tiers import apply_daybreak, negotiate_request_tier

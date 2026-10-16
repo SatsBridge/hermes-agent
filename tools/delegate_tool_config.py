@@ -491,7 +491,7 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
         )
         return _credential_bundle(
             values["model"], None, None, None, None,
-            _merge_request_overrides(getattr(parent_agent, "request_overrides", None), explicit_request_overrides),
+            _merge_request_overrides(inherited, explicit_request_overrides),
         )
     return _runtime_provider_credentials(values, explicit_request_overrides)
 

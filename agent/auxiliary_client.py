@@ -6682,6 +6682,13 @@ def _build_call_kwargs(
         from agent.auxiliary_structured_output import without_unsupported_response_format
         merged_extra = without_unsupported_response_format(merged_extra, provider_norm, effective_base, model, task)
     if merged_extra:
+        from hermes_cli.models import apply_aux_service_tier_overrides
+
+        lifted = apply_aux_service_tier_overrides(
+            {"extra_body": merged_extra}, None, model=model, provider=provider, base_url=effective_base, task=task)
+        kwargs.update({key: lifted[key] for key in ("service_tier", "speed") if key in lifted})
+        merged_extra = lifted.get("extra_body") or {}
+    if merged_extra:
         kwargs["extra_body"] = merged_extra
     # Anthropic Messages adapters take reasoning via a private kwarg that plain OpenAI SDK clients
     # would reject; Portal Claude is dual-wire, so include it only when the catalog id selects

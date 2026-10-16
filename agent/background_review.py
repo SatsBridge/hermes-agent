@@ -1021,6 +1021,10 @@ def build_cache_parity_fork(
     if not _routed and write_origin == "background_review":
         _warn_ignored_reasoning_effort(agent, task_cfg)
     review_agent = AIAgent(**_fork_init_kwargs(agent, _rt, _routed, max_iterations, task_cfg))
+    from hermes_cli.models import bind_aux_slot_service_tier
+
+    bind_aux_slot_service_tier(review_agent, _rt.get("_aux_slot"))
+    review_agent._block_service_tier_escalation = True
     review_agent._memory_write_origin = review_agent._memory_write_context = write_origin
     # Fork-turn log tag: the fork shares the parent's session_id (and model on the
     # same-model path), so its turn-start/turn-exit log lines are otherwise

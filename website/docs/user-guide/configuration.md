@@ -2068,7 +2068,7 @@ The override applies automatically everywhere: CLI startup, `hermes -p` one-shot
 
 ## Fast Mode
 
-Fast mode selects a provider tier: OpenAI [Priority Processing](https://openai.com/api-priority-processing/) (`service_tier: priority`), lower-cost Flex (`service_tier: flex`) on eligible OpenAI and Gemini models, and Ultrafast (`service_tier: ultrafast`) on supported OpenAI models; xAI Priority Processing on Grok 4.6; or Anthropic [Fast Mode](https://platform.claude.com/docs/en/build-with-claude/fast-mode) (`speed: fast`, Opus 4.8 / Opus 5 / Opus 5.5 only). Gemini Flex is limited to Gemini 2.5+ and is sent as a top-level `service_tier` field. The `openai` and `openai-api` providers use the first-party OpenAI endpoint. It is **off by default**.
+Fast mode selects a provider tier: OpenAI [Priority Processing](https://openai.com/api-priority-processing/) (`service_tier: priority`), lower-cost Flex (`service_tier: flex`) on eligible OpenAI and Gemini models, and Ultrafast (`service_tier: ultrafast`) on supported OpenAI models; xAI Priority Processing on Grok 4.6; or Anthropic [Fast Mode](https://platform.claude.com/docs/en/build-with-claude/fast-mode) (`speed: fast`, Opus 4.8 / Opus 5 / Opus 5.5 only). OpenRouter accepts `priority` and `flex` for any catalog model. Gemini Flex is limited to Gemini 2.5+ and is sent as a top-level `service_tier` field. The `openai` and `openai-api` providers use the first-party OpenAI endpoint. It is **off by default**.
 
 ```yaml
 agent:
@@ -2084,13 +2084,13 @@ agent:
 |------|---------------------------|------------|
 | `normal` (default, `""`) | Never | Cheapest; standard latency |
 | `fast` | Every request | Long interactive sessions where you always want speed |
-| `flex` | Every request, on eligible OpenAI or Gemini 2.5+ routes | Lower-cost processing when latency is less important |
+| `flex` | Every request, on OpenRouter, eligible OpenAI, or Gemini 2.5+ routes | Lower-cost processing when latency is less important |
 | `auto` | Requests in the first `fast_auto_seconds` of **every** turn | Snappy first reply; long tool loops fall back to standard pricing |
 | `cold` | Same window, but only on the **first turn** of a session (no prior history) | Fast onboarding reply, standard pricing afterwards |
 
-`/fast normal|fast|flex|ultrafast|auto|cold` switches the mode for the session (`/fast ultra` is shorthand for `ultrafast`). Flex is only offered where the selected first-party OpenAI/Gemini model and route support it; unsupported selections are not converted to a different tier. On a ChatGPT/Codex subscription, Ultrafast is offered only when your account's Codex model catalog lists it for the current model; the backend otherwise accepts the request and serves standard speed. Add `--global` to persist to `config.yaml`. `/fast` alone shows the current mode.
+`/fast normal|fast|flex|ultrafast|auto|cold` switches the mode for the session (`/fast ultra` is shorthand for `ultrafast`). OpenRouter supports `priority` and `flex` across its catalog; first-party routes still require model/route eligibility. Unsupported selections are not converted to a different tier. On a ChatGPT/Codex subscription, Ultrafast is offered only when your account's Codex model catalog lists it for the current model; the backend otherwise accepts the request and serves standard speed. Add `--global` to persist to `config.yaml`. `/fast` alone shows the current mode.
 
-**Cost note:** premium tiers can cost more than standard (Anthropic: $8 / $40 per MTok in/out on Opus 5.5, $10 / $50 on Opus 5 and Opus 4.8), stacking with prompt-cache pricing; Flex is the lower-cost provider option where supported. Hermes prices each Anthropic response from the speed the API reports in `usage.speed`. `auto`/`cold` bound the premium tier to the window only. Fast params are only sent to first-party endpoints that support them; OpenRouter, Nous Portal, Azure, Bedrock, and custom `base_url` routes never receive a derived first-party tier.
+**Cost note:** premium tiers can cost more than standard (Anthropic: $8 / $40 per MTok in/out on Opus 5.5, $10 / $50 on Opus 5 and Opus 4.8), stacking with prompt-cache pricing; Flex is the lower-cost provider option where supported. Hermes prices each Anthropic response from the speed the API reports in `usage.speed`. `auto`/`cold` bound the premium tier to the window only. OpenRouter receives its documented `service_tier` values; other aggregators, proxies, and custom `base_url` routes do not receive derived first-party tier values.
 
 **Prompt cache:** only the per-request parameter changes between requests; the system prompt, tools, and messages stay byte-identical. Anthropic keeps a separate prompt cache for each speed, so on Anthropic every `auto`/`cold` window boundary re-writes the conversation prefix at the new speed. For long Anthropic sessions, `fast` or `normal` keeps a single warm cache.
 
@@ -2100,7 +2100,7 @@ When an Anthropic organization has no fast-mode capacity for a model (the API an
 
 ### Fast tiers behind a gateway or proxy
 
-The first-party-only rule is deliberate: a fast-tier parameter is a billing instruction, and Hermes only sends it to the endpoint whose price list it knows. If you run an OpenAI-compatible gateway, router, or proxy that exposes its own priority tier (its own `service_tier` value, or a differently named field), request it through that provider's `extra_body` instead of `agent.service_tier`. `extra_body` on a [named custom provider](../integrations/providers.md#named-custom-providers) is merged into **every** chat-completions request routed to that endpoint, survives gateway turns and `/fast` changes, and is dropped again when you `/model` away from the provider:
+OpenRouter's `priority` and `flex` tiers are sent through `agent.service_tier` for any catalog model. For another OpenAI-compatible gateway or proxy that exposes its own priority tier (its own `service_tier` value, or a differently named field), request it through that provider's `extra_body` instead. `extra_body` on a [named custom provider](../integrations/providers.md#named-custom-providers) is merged into **every** chat-completions request routed to that endpoint, survives gateway turns and `/fast` changes, and is dropped again when you `/model` away from the provider:
 
 ```yaml
 providers:
@@ -2112,7 +2112,7 @@ providers:
       service_tier: priority     # whatever tier value your gateway documents
 ```
 
-Differences from `agent.service_tier`: the tier is always on for that provider (no `auto`/`cold` window), `/fast` does not toggle it, and Hermes does not validate the value — the gateway decides what it accepts and what it bills.
+Differences from `agent.service_tier`: the custom tier is always on for that provider (no `auto`/`cold` window), `/fast` does not toggle it, and Hermes does not validate the value — the gateway decides what it accepts and what it bills.
 
 #### Per-turn tier escalation (opt-in)
 

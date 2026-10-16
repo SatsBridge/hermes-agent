@@ -176,13 +176,12 @@ def _stored_session_runtime_overrides(row: dict | None) -> dict:
         overrides["provider_override"] = provider
     if isinstance(reasoning_config, dict):
         overrides["reasoning_config_override"] = reasoning_config
-    # * Only an explicit session /fast pin is restored as an override.
-    # Unpinned rows inherit profile resolution (per-model > global).
-    # ``normal`` without the flag is a legacy explicit pin (never written
-    # for unpinned inherit).
+    # New rows mark pins explicitly and omit inherited tiers. Before that marker,
+    # the stored value is the only evidence of the tier the session last used;
+    # keep restoring it to avoid a silent route/tariff change on upgrade.
     if service_tier and (
-        model_config.get("service_tier_session_pinned")
-        or service_tier.lower() == "normal"
+        model_config.get("service_tier_session_pinned") is True
+        or "service_tier_session_pinned" not in model_config
     ):
         overrides["service_tier_override"] = "" if service_tier.lower() == "normal" else service_tier
     return overrides
@@ -682,12 +681,11 @@ def _make_agent(
     # them here would bill a fixed tier the user never chose. The resolver's
     # _SUPPORTED_SERVICE_TIERS whitelist backstops this, but the gate keeps intent local.
     if _effective_tier in ("priority", "ultrafast", "flex"):
-        from hermes_cli.models import resolve_fast_mode_overrides
+        from hermes_cli.models import resolve_service_tier_overrides
 
         try:
-            _tier_overrides = resolve_fast_mode_overrides(
-                model, tier=_effective_tier,
-                provider=runtime.get("provider"), base_url=runtime.get("base_url"))
+            _tier_overrides = resolve_service_tier_overrides(
+                model, _effective_tier, provider=runtime.get("provider"), base_url=runtime.get("base_url"))
             if _effective_tier == "ultrafast" and _tier_overrides is not None:
                 from agent.codex_service_tiers import ultrafast_offered
                 if not ultrafast_offered(model, provider=runtime.get("provider"),
@@ -728,6 +726,10 @@ def _make_agent(
         # (service_tier / speed), so the entry's extra_body passes through untouched.
         request_overrides={**(runtime.get("request_overrides") or {}), **(_tier_overrides or {})} or None,
         prefill_messages=_load_prefill_messages() or None, **_agent_cbs(sid))
+    agent._service_tier_session_pinned = service_tier_override is not None
+    from agent.fast_mode import set_framework_baked_tier_keys
+
+    set_framework_baked_tier_keys(agent, _tier_overrides)
     if context_cwd_is_launch_artifact is None:
         context_cwd_is_launch_artifact = _context_cwd_is_launch_artifact(session)
     agent._context_cwd_is_launch_artifact = bool(context_cwd_is_launch_artifact)

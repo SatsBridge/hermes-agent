@@ -1091,7 +1091,7 @@ def _(rid, params: dict) -> dict:
             # send dispatch (both Desktop and TUI clients already handle {type:"send"}).
             return _ok(rid, {"type": "send", "message": seed})
         payload = {"output": output or "(no output)"}
-        if warning := _mirror_slash_side_effects(sid, session, cmd):
+        if warning := _mirror_slash_side_effects(sid, session, cmd, output):
             payload["warning"] = warning
         if base in _SESSION_CONTROL_SLASHES:
             _publish_session_control_snapshot(sid, session)
