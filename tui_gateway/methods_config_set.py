@@ -191,18 +191,26 @@ def _set_fast(rid, params, key, value, session):
         from hermes_cli.models import resolve_fast_mode_overrides
         if agent is not None:
             target_model = getattr(agent, "model", None)
+            target_provider = getattr(agent, "provider", None)
+            target_base_url = getattr(agent, "base_url", None)
         else:  # a pre-build session may carry a picked model (desktop draft): validate against THAT
             session_override = (session or {}).get("model_override") or {}
-            target_model = (isinstance(session_override, dict) and session_override.get("model")) or _resolve_model()
+            session_override = session_override if isinstance(session_override, dict) else {}
+            startup_model, startup_provider = (
+                _resolve_startup_runtime()
+                if not session_override.get("model") or not session_override.get("provider") else (None, None))
+            target_model = session_override.get("model") or startup_model
+            target_provider = session_override.get("provider") or startup_provider
+            target_base_url = session_override.get("base_url")
         if not target_model:
             return _err(rid, 4002, "fast mode is not available without a selected model")
-        overrides = resolve_fast_mode_overrides(target_model, provider=getattr(agent, "provider", None),
-                                                base_url=getattr(agent, "base_url", None),
+        overrides = resolve_fast_mode_overrides(target_model, provider=target_provider,
+                                                base_url=target_base_url,
                                                 tier=nv if nv in ("ultrafast", "flex") else None)
         if overrides is not None and nv == "ultrafast":
             from agent.codex_service_tiers import ultrafast_offered
-            if not ultrafast_offered(target_model, provider=getattr(agent, "provider", None),
-                                     base_url=getattr(agent, "base_url", None),
+            if not ultrafast_offered(target_model, provider=target_provider,
+                                     base_url=target_base_url,
                                      access_token=getattr(agent, "api_key", None)):
                 overrides = None
         if overrides is None:

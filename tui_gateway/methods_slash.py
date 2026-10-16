@@ -420,9 +420,8 @@ _FAST_TIERS = {"fast": "priority", "on": "priority", "normal": None, "off": None
 
 def _mirror_fast(sid, session, agent, arg) -> None:
     if agent:
-        words = arg.lower().split()
-        global_scope = "--global" in words
-        mode = next((word for word in words if not word.startswith("--")), "")
+        from hermes_cli.cli_commands_mixin import _split_scope_flags
+        mode, global_scope = _split_scope_flags(arg)
         if mode in _FAST_TIERS:
             tier = _FAST_TIERS[mode]
             from agent.fast_mode import STATIC_TIERS
