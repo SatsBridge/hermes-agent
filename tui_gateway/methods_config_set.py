@@ -193,15 +193,13 @@ def _set_fast(rid, params, key, value, session):
             target_model = getattr(agent, "model", None)
             target_provider = getattr(agent, "provider", None)
             target_base_url = getattr(agent, "base_url", None)
+            target_api_key = getattr(agent, "api_key", None)
         else:  # a pre-build session may carry a picked model (desktop draft): validate against THAT
-            session_override = (session or {}).get("model_override") or {}
-            session_override = session_override if isinstance(session_override, dict) else {}
-            startup_model, startup_provider = (
-                _resolve_startup_runtime()
-                if not session_override.get("model") or not session_override.get("provider") else (None, None))
-            target_model = session_override.get("model") or startup_model
-            target_provider = session_override.get("provider") or startup_provider
-            target_base_url = session_override.get("base_url")
+            target_model, target_runtime = _resolve_agent_model_runtime(
+                (session or {}).get("model_override"), (session or {}).get("provider_override"))
+            target_provider = target_runtime.get("provider")
+            target_base_url = target_runtime.get("base_url")
+            target_api_key = target_runtime.get("api_key")
         if not target_model:
             return _err(rid, 4002, "fast mode is not available without a selected model")
         overrides = resolve_fast_mode_overrides(target_model, provider=target_provider,
@@ -211,7 +209,7 @@ def _set_fast(rid, params, key, value, session):
             from agent.codex_service_tiers import ultrafast_offered
             if not ultrafast_offered(target_model, provider=target_provider,
                                      base_url=target_base_url,
-                                     access_token=getattr(agent, "api_key", None)):
+                                     access_token=target_api_key):
                 overrides = None
         if overrides is None:
             return _err(rid, 4002, f"{nv} mode is not available for this model")
