@@ -1019,7 +1019,7 @@ prompt_caching:
 #     enabled: true            # false = skip automatic forks (/refine still works)
 #     provider: "auto"         # or pin a cheaper model (see memory.md)
 #     model: ""
-#     # service_tier: "flex"   # OpenRouter-only; extra_body.service_tier wins
+#     # service_tier: "flex"   # Route-aware Fast Mode tier; extra_body.service_tier wins
 
 # =============================================================================
 # Persistent Memory

@@ -86,6 +86,15 @@ def test_unrouted_runtime_keeps_parent_pool_and_overrides():
     assert rt["credential_pool"] == "parent-pool"
     assert rt["request_overrides"] == {"service_tier": "priority"}
     assert rt["max_tokens"] == 4096
+def test_unrouted_runtime_drops_framework_baked_parent_tier():
+    agent = _FakeAgent()
+    agent.request_overrides = {"service_tier": "priority"}
+    agent._framework_baked_tier_keys = frozenset({"service_tier"})
+    with patch("hermes_cli.config.load_config", return_value={}), patch("hermes_cli.config.load_config_readonly", return_value={}):
+        rt = br._resolve_review_runtime(agent)
+    assert "service_tier" not in rt["request_overrides"]
+
+
 
 
 def test_unrouted_runtime_applies_aux_service_tier_on_openrouter():
@@ -135,30 +144,30 @@ def test_routed_runtime_applies_aux_service_tier_on_openrouter():
     assert rt["request_overrides"].get("service_tier") == "priority"
 
 
-def test_aux_service_tier_ignored_on_first_party_review_runtime():
+def test_aux_service_tier_maps_on_first_party_review_runtime():
     agent = _FakeAgent()
     cfg = {"auxiliary": {"background_review": {"service_tier": "flex"}}}
     with patch("hermes_cli.config.load_config", return_value=cfg), patch(
         "hermes_cli.config.load_config_readonly", return_value=cfg
     ):
         rt = br._resolve_review_runtime(agent)
-    assert "service_tier" not in rt["request_overrides"]
+    assert rt["request_overrides"].get("service_tier") == "flex"
     assert "speed" not in rt["request_overrides"]
 
 
-def test_aux_service_tier_priority_ignored_on_first_party_review_runtime():
+def test_aux_service_tier_priority_maps_on_first_party_review_runtime():
     agent = _FakeAgent()
     cfg = {"auxiliary": {"background_review": {"service_tier": "priority"}}}
     with patch("hermes_cli.config.load_config", return_value=cfg), patch(
         "hermes_cli.config.load_config_readonly", return_value=cfg
     ):
         rt = br._resolve_review_runtime(agent)
-    assert "service_tier" not in rt["request_overrides"]
+    assert rt["request_overrides"].get("service_tier") == "priority"
     assert "speed" not in rt["request_overrides"]
 
 
 def test_apply_aux_honors_slot_extra_body_over_slot_tier():
-    from hermes_cli.models import apply_aux_service_tier_overrides
+    from hermes_cli.models_service_tiers import apply_aux_service_tier_overrides
 
     out = apply_aux_service_tier_overrides(
         {},

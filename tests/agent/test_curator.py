@@ -794,7 +794,7 @@ def test_review_provider_applies_aux_service_tier_priority(curator_env, monkeypa
     assert overrides.get("service_tier") == "priority"
 
 
-def test_review_provider_ignores_aux_service_tier_on_first_party(curator_env, monkeypatch):
+def test_review_provider_maps_aux_service_tier_on_first_party(curator_env, monkeypatch):
     curator = curator_env["curator"]
     cfg = {
         "model": {"provider": "openai", "default": "gpt-5.4"},
@@ -818,11 +818,11 @@ def test_review_provider_ignores_aux_service_tier_on_first_party(curator_env, mo
         },
     )
     _rp, _model, _provider, overrides = curator._resolve_review_provider()
-    assert "service_tier" not in overrides
+    assert overrides.get("service_tier") == "flex"
     assert "speed" not in overrides
 
 
-def test_review_provider_ignores_aux_priority_on_first_party(curator_env, monkeypatch):
+def test_review_provider_maps_aux_priority_on_first_party(curator_env, monkeypatch):
     curator = curator_env["curator"]
     cfg = {
         "model": {"provider": "openai", "default": "gpt-5.4"},
@@ -846,7 +846,7 @@ def test_review_provider_ignores_aux_priority_on_first_party(curator_env, monkey
         },
     )
     _rp, _model, _provider, overrides = curator._resolve_review_provider()
-    assert "service_tier" not in overrides
+    assert overrides.get("service_tier") == "priority"
     assert "speed" not in overrides
 
 
