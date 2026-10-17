@@ -153,6 +153,24 @@ def test_aux_service_tier_reaches_sync_async_and_stream_request_kwargs(monkeypat
     assert sent["stream"] is True
 
 
+def test_codex_aux_service_tier_reaches_responses_wire(monkeypatch):
+    from agent.auxiliary_client import _CodexCompletionsAdapter, _build_call_kwargs
+
+    base_url = "https://chatgpt.com/backend-api/codex"
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: {"agent": {"service_tier": "priority"}})
+    request = _build_call_kwargs(
+        provider="openai-codex", model="gpt-5.6-luna", messages=[{"role": "user", "content": "hi"}],
+        base_url=base_url, task="compression",
+    )
+    client = MagicMock()
+    client.base_url = base_url
+
+    response_kwargs, _, _ = _CodexCompletionsAdapter(client, "gpt-5.6-luna")._build_responses_kwargs(request)
+
+    assert request["service_tier"] == "priority"
+    assert response_kwargs["service_tier"] == "priority"
+
+
 def test_anthropic_slot_tier_survives_framework_binding():
     from agent.fast_mode import effective_request_overrides
     from hermes_cli.models_service_tiers import apply_aux_service_tier_overrides, bind_aux_slot_service_tier

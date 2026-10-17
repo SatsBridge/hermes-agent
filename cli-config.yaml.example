@@ -906,9 +906,9 @@ prompt_caching:
 #                            # Increase for slow connections or self-hosted image servers
 #     reasoning_effort: ""   # Per-task thinking level: none, minimal, low, medium,
 #                            # high, xhigh, max, ultra. Empty = provider default.
-#                            # service_tier: flex | priority  OpenRouter-only
-#                            # queue for this aux slot (extra_body.service_tier
-#                            # wins; first-party routes ignore it).
+#                            # service_tier: flex | priority  Route-aware tier;
+#                            # mapped only where the resolved route supports it.
+#                            # extra_body.service_tier takes precedence.
 #                            # Works on every auxiliary task block (vision,
 #                            # web_extract, compression, title_generation, curator,
 #                            # background_review, moa_reference, ...). Example: run
