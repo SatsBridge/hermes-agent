@@ -86,21 +86,20 @@ def test_review_auxiliary_slot_is_mapped_and_bound_after_child_route_resolution(
 
     with patch("tools.delegate_tool._load_config", return_value={}), \
          patch("run_agent.AIAgent", return_value=child), \
-         patch.object(models_service_tiers, "aux_slot_configures_service_tier", return_value=True), \
          patch.object(models_service_tiers, "apply_aux_service_tier_overrides", side_effect=apply), \
          patch.object(models_service_tiers, "bind_aux_slot_service_tier", side_effect=lambda agent, slot: captured.update(bind=(agent, slot))):
         _build_child_agent(
             task_index=0, goal="review", context=None, toolsets=None, model=None,
             max_iterations=10, parent_agent=parent, task_count=1,
-            auxiliary_slot={"service_tier": "priority"},
+            auxiliary_slot={"model": "review-model"},
         )
 
     assert captured["apply"] == (
-        {"service_tier": "priority"},
+        {"model": "review-model"},
         {"model": "gpt-5.4", "provider": "openai", "base_url": "https://api.openai.com/v1", "task": "review"},
     )
     assert child.request_overrides == {"service_tier": "priority"}
-    assert captured["bind"] == (child, {"service_tier": "priority"})
+    assert captured["bind"] == (child, {"model": "review-model"})
 
 
 def test_declared_chain_flows_through_real_profile_config_loader(

@@ -312,6 +312,14 @@ def _resolve_review_runtime(agent: Any, task_cfg: Optional[dict[str, Any]] = Non
         return routed
     except Exception as e:
         _warn_review_routing_fallback(agent, task_provider, task_model, e)
+        from hermes_cli.models_service_tiers import apply_aux_service_tier_overrides
+
+        parent["request_overrides"] = apply_aux_service_tier_overrides(
+            parent["request_overrides"], task,
+            model=parent.get("model"), provider=parent.get("provider"),
+            base_url=parent.get("base_url"), task="background_review",
+        )
+        parent["_aux_slot"] = task
         return parent
 
 
