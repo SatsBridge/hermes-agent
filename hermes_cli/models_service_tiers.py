@@ -81,6 +81,12 @@ def apply_aux_service_tier_overrides(
             tier, configured = resolve_service_tier_source(agent_cfg, model)
         except Exception:
             logger.debug("Could not resolve agent service tier for auxiliary request", exc_info=True)
+    if had_dict_extra and "service_tier" in extra and extra_tier in (None, ""):
+        extra.pop("service_tier")
+        if extra:
+            merged["extra_body"] = extra
+        else:
+            merged.pop("extra_body", None)
     if not configured:
         return merged
 

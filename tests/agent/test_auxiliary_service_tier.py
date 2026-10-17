@@ -50,6 +50,20 @@ def test_agent_tier_applies_without_auxiliary_task_name(monkeypatch):
     assert kwargs["service_tier"] == "priority"
 
 
+@pytest.mark.parametrize("empty_tier", [None, ""])
+def test_empty_extra_body_tier_is_omitted_without_mutating_input(monkeypatch, empty_tier):
+    from agent.auxiliary_client import _build_call_kwargs
+
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", dict)
+    body = {"service_tier": empty_tier, "keep": True}
+    kwargs = _build_call_kwargs(
+        provider="openai", model="gpt-5.4", messages=[{"role": "user", "content": "hi"}],
+        extra_body=body, base_url="https://api.openai.com/v1", task="compression",
+    )
+    assert kwargs["extra_body"] == {"keep": True}
+    assert body == {"service_tier": empty_tier, "keep": True}
+
+
 def test_fallback_request_resolves_tier_for_its_actual_model(monkeypatch):
     from agent import auxiliary_client as aux
 
