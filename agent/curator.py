@@ -1063,22 +1063,24 @@ def _resolve_review_provider() -> tuple:
     (HTTP 400 "No models provided"). Never raises."""
     rp: dict[str, Any] = {}
     overrides, provider, model_name, binding = {}, None, "", None
+    slot = None
     try:
         from hermes_cli.config import load_config_readonly
         from hermes_cli.models_service_tiers import apply_aux_service_tier_overrides, bind_aux_slot_service_tier
         from hermes_cli.runtime_provider import resolve_runtime_provider
         cfg = load_config_readonly()
+        slot = _subdict(cfg, "auxiliary", "curator")
         binding = _resolve_review_runtime(cfg)
         model_name = binding.model
         rp = resolve_runtime_provider(
             requested=binding.provider, target_model=binding.model,
             explicit_api_key=binding.explicit_api_key, explicit_base_url=binding.explicit_base_url,
         )
+        rp["_aux_slot"] = slot
         provider = rp.get("provider") or binding.provider
         overrides = _merge_request_overrides(rp.get("request_overrides"), binding.request_overrides.get("extra_body"))
         if isinstance(rp.get("model"), str) and rp["model"].strip():
             model_name = rp["model"].strip()
-        slot = _subdict(cfg, "auxiliary", "curator")
         overrides = apply_aux_service_tier_overrides(
             overrides,
             slot,
@@ -1087,8 +1089,9 @@ def _resolve_review_provider() -> tuple:
             base_url=rp.get("base_url") or binding.explicit_base_url,
             task="curator",
         )
-        rp["_aux_slot"] = slot
     except Exception as e:
+        if slot is not None:
+            rp["_aux_slot"] = slot
         logger.warning("curator: auxiliary.curator.provider '%s' (model '%s') could not be resolved: %s — the review "
                        "runs on the main model instead", getattr(binding, "provider", None), model_name, e)
     return rp, model_name, provider, overrides
