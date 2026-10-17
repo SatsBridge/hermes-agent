@@ -103,30 +103,47 @@ def apply_aux_service_tier_overrides(
     return merged
 
 
-def aux_slot_configures_service_tier(slot: dict[str, Any] | None) -> bool:
-    """True when the auxiliary slot names a tier at top-level or in ``extra_body``."""
-    if not isinstance(slot, dict):
-        return False
-    extra = slot.get("extra_body")
-    extra_tier = extra.get("service_tier") if isinstance(extra, dict) else None
-    return extra_tier not in (None, "") or slot.get("service_tier") not in (None, "")
-
-
 def bind_aux_slot_service_tier(agent: Any, slot: dict[str, Any] | None) -> None:
-    """Pin an already-mapped auxiliary slot tier so the agent fallback cannot replace it."""
-    if not aux_slot_configures_service_tier(slot):
-        return
-    from hermes_constants import parse_service_tier
+    """Pin logical auxiliary tier intent, not its route-specific wire mapping."""
+    from hermes_constants import (
+        SERVICE_TIER_BOUNDED_VALUES, SERVICE_TIER_DISABLED_VALUES,
+        parse_service_tier, resolve_service_tier_source,
+    )
     from agent.fast_mode import TIER_WIRE_KEYS, set_framework_baked_tier_keys
 
+    raw = None
+    if isinstance(slot, dict):
+        extra = slot.get("extra_body")
+        raw = extra.get("service_tier") if isinstance(extra, dict) else None
+        if raw in (None, ""):
+            raw = slot.get("service_tier")
+    normalized = str(raw or "").strip().lower()
+    if raw not in (None, "") and (
+        parse_service_tier(raw) is not None or normalized in SERVICE_TIER_DISABLED_VALUES
+    ):
+        tier, configured = parse_service_tier(raw), True
+    else:
+        try:
+            from hermes_cli.config import load_config_readonly
+            agent_cfg = load_config_readonly().get("agent") or {}
+            tier, configured = resolve_service_tier_source(
+                agent_cfg, getattr(agent, "model", ""),
+                fallback=getattr(agent, "service_tier", None),
+            )
+        except Exception:
+            logger.debug("Could not resolve service tier for auxiliary agent", exc_info=True)
+            return
+    if not configured:
+        return
+    # auto/cold are bounded main-session windows, not auxiliary request tiers.
+    if tier in SERVICE_TIER_BOUNDED_VALUES:
+        tier = None
     overrides = getattr(agent, "request_overrides", None)
     mapped = {
         key: overrides[key]
         for key in TIER_WIRE_KEYS
         if isinstance(overrides, dict) and key in overrides
     }
-    agent.service_tier = parse_service_tier(mapped.get("service_tier"))
-    if agent.service_tier is None and mapped.get("speed") == "fast":
-        agent.service_tier = "priority"
+    agent.service_tier = tier
     agent._service_tier_session_pinned = True
     set_framework_baked_tier_keys(agent, mapped or None)

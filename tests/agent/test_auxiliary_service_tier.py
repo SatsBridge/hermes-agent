@@ -157,3 +157,81 @@ def test_anthropic_slot_tier_survives_framework_binding():
     bind_aux_slot_service_tier(agent, slot)
     assert agent.service_tier == "priority"
     assert effective_request_overrides(agent)["speed"] == "fast"
+
+
+def test_aux_slot_logical_tier_survives_route_changes(monkeypatch):
+    from agent.fast_mode import effective_request_overrides
+    from hermes_cli.models_service_tiers import apply_aux_service_tier_overrides, bind_aux_slot_service_tier
+
+    slot = {"service_tier": "flex"}
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: {"agent": {"service_tier": "priority"}})
+    mapped = apply_aux_service_tier_overrides(
+        {}, slot, model="claude-opus-5", provider="anthropic",
+        base_url="https://api.anthropic.com", task="review",
+    )
+    agent = SimpleNamespace(
+        request_overrides=mapped, model="claude-opus-5", provider="anthropic",
+        base_url="https://api.anthropic.com", service_tier=None,
+    )
+    bind_aux_slot_service_tier(agent, slot)
+
+    for model, provider, base_url, expected in (
+        ("gpt-5.4", "openai", "https://api.openai.com/v1", "flex"),
+        ("claude-opus-5", "anthropic", "https://api.anthropic.com", None),
+        ("gpt-5.4", "openai", "https://api.openai.com/v1", "flex"),
+    ):
+        agent.model, agent.provider, agent.base_url = model, provider, base_url
+        assert effective_request_overrides(agent).get("service_tier") == expected
+
+
+def test_aux_global_bounded_mode_does_not_reopen_window_in_agent_turn(monkeypatch):
+    from agent.fast_mode import begin_turn, effective_request_overrides
+    from hermes_cli.models_service_tiers import bind_aux_slot_service_tier
+
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: {"agent": {"service_tier": "auto"}})
+    agent = SimpleNamespace(
+        request_overrides={}, model="gpt-5.4", provider="openai",
+        base_url="https://api.openai.com/v1", service_tier="auto",
+        _block_service_tier_escalation=True,
+    )
+    bind_aux_slot_service_tier(agent, {})
+    begin_turn(agent, [])
+    assert agent._service_tier_session_pinned is True
+    assert agent.service_tier is None
+    assert "service_tier" not in effective_request_overrides(agent)
+
+
+def test_aux_global_model_override_is_pinned_as_logical_tier(monkeypatch):
+    from agent.fast_mode import effective_request_overrides
+    from hermes_cli.models_service_tiers import bind_aux_slot_service_tier
+
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: {
+        "agent": {"service_tier": "priority", "service_tier_overrides": {"gpt-5.4": "flex"}},
+    })
+    agent = SimpleNamespace(
+        request_overrides={}, model="gpt-5.4", provider="openai",
+        base_url="https://api.openai.com/v1", service_tier="priority",
+    )
+    bind_aux_slot_service_tier(agent, None)
+    assert agent.service_tier == "flex"
+    assert effective_request_overrides(agent)["service_tier"] == "flex"
+
+
+def test_aux_explicit_normal_binding_stops_global_fallback(monkeypatch):
+    from agent.fast_mode import effective_request_overrides
+    from hermes_cli.models_service_tiers import apply_aux_service_tier_overrides, bind_aux_slot_service_tier
+
+    cfg = {"agent": {"service_tier": "priority"}}
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: cfg)
+    slot = {"service_tier": "normal"}
+    overrides = apply_aux_service_tier_overrides(
+        {}, slot, model="gpt-5.4", provider="openai",
+        base_url="https://api.openai.com/v1", task="review",
+    )
+    agent = SimpleNamespace(
+        request_overrides=overrides, model="gpt-5.4", provider="openai",
+        base_url="https://api.openai.com/v1", service_tier="priority",
+    )
+    bind_aux_slot_service_tier(agent, slot)
+    assert agent._service_tier_session_pinned is True
+    assert "service_tier" not in effective_request_overrides(agent)

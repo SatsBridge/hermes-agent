@@ -304,17 +304,15 @@ def _build_child_agent(
     child._print_fn = getattr(parent_agent, "_print_fn", None)
     if isinstance(auxiliary_slot, dict):
         from hermes_cli.models_service_tiers import (
-            apply_aux_service_tier_overrides, aux_slot_configures_service_tier,
-            bind_aux_slot_service_tier,
+            apply_aux_service_tier_overrides, bind_aux_slot_service_tier,
         )
-        if aux_slot_configures_service_tier(auxiliary_slot):
-            runtime = child._current_main_runtime()
-            child.request_overrides = apply_aux_service_tier_overrides(
-                child.request_overrides, auxiliary_slot,
-                model=child.model, provider=child.provider,
-                base_url=runtime.get("base_url"), task="review",
-            )
-            bind_aux_slot_service_tier(child, auxiliary_slot)
+        runtime = child._current_main_runtime()
+        child.request_overrides = apply_aux_service_tier_overrides(
+            child.request_overrides, auxiliary_slot,
+            model=child.model, provider=child.provider,
+            base_url=runtime.get("base_url"), task="review",
+        )
+        bind_aux_slot_service_tier(child, auxiliary_slot)
     _apply_child_cache_ttl(child)
     if child_session_db is not None:
         child._owns_session_db = True  # released by the child's close(), never by the parent
