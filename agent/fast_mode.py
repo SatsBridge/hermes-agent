@@ -90,11 +90,14 @@ def logical_service_tier_source(agent: Any) -> tuple[str | None, bool]:
         raw = cfg.get("agent")
         if isinstance(raw, dict):
             agent_cfg = raw
-    return resolve_service_tier_source(
+    tier, configured = resolve_service_tier_source(
         agent_cfg,
         str(getattr(agent, "model", "") or ""),
         fallback=getattr(agent, "service_tier", None),
     )
+    if getattr(agent, "_aux_service_tier", False) and tier in BOUNDED_MODES:
+        return None, True
+    return tier, configured
 
 
 def logical_service_tier(agent: Any) -> str | None:

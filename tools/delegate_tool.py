@@ -577,6 +577,7 @@ def delegate_task(
     output_schema: Optional[dict[str, Any]] = None, images: Optional[list[str]] = None, action: Optional[str] = None,
     subagent_id: Optional[str] = None, message: Optional[str] = None, parent_agent=None,
     credentials_cfg: Optional[dict[str, Any]] = None,
+    auxiliary_slot: Optional[dict[str, Any]] = None,
 ) -> str:
     """Spawn child agents (single ``goal`` or ``tasks=[...]`` batch) or control running ones. ``action``
     list/steer/stop run synchronously and bypass the pause gate, depth limit and async dispatch. ``role`` is legacy
@@ -676,7 +677,10 @@ def delegate_task(
     children, err = _build_children(
         task_list, task_schemas, routes, top_role=top_role, max_iterations=default_max_iter, parent_agent=parent_agent,
         live_deleg_id=live_deleg_id, live_writers=live_writers, task_images=task_images,
-        auxiliary_slot=credentials_cfg.get("_aux_slot") if credentials_cfg else None,
+        auxiliary_slot=(
+            auxiliary_slot if auxiliary_slot is not None
+            else credentials_cfg.get("_aux_slot") if credentials_cfg else None
+        ),
     )
     if err:
         return tool_error(err)

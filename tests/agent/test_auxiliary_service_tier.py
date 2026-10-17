@@ -196,25 +196,64 @@ def test_aux_global_bounded_mode_does_not_reopen_window_in_agent_turn(monkeypatc
     )
     bind_aux_slot_service_tier(agent, {})
     begin_turn(agent, [])
-    assert agent._service_tier_session_pinned is True
+    assert agent._service_tier_session_pinned is False
     assert agent.service_tier is None
     assert "service_tier" not in effective_request_overrides(agent)
 
 
-def test_aux_global_model_override_is_pinned_as_logical_tier(monkeypatch):
-    from agent.fast_mode import effective_request_overrides
+def test_aux_global_and_model_tiers_follow_current_aux_model(monkeypatch):
+    from agent.fast_mode import begin_turn, effective_request_overrides
     from hermes_cli.models_service_tiers import bind_aux_slot_service_tier
 
     monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: {
-        "agent": {"service_tier": "priority", "service_tier_overrides": {"gpt-5.4": "flex"}},
+        "agent": {
+            "service_tier": "priority",
+            "service_tier_overrides": {
+                "gpt-5.4": "flex", "gpt-5.5": "normal", "gpt-5.6": "auto",
+            },
+        },
     })
     agent = SimpleNamespace(
         request_overrides={}, model="gpt-5.4", provider="openai",
         base_url="https://api.openai.com/v1", service_tier="priority",
     )
-    bind_aux_slot_service_tier(agent, None)
-    assert agent.service_tier == "flex"
+    bind_aux_slot_service_tier(agent, {})
+    begin_turn(agent, [])
     assert effective_request_overrides(agent)["service_tier"] == "flex"
+    for model, expected in (("gpt-5.5", None), ("gpt-5.6", None), ("gpt-5.7", "priority")):
+        agent.model = model
+        assert effective_request_overrides(agent).get("service_tier") == expected
+
+
+@pytest.mark.parametrize("bounded_tier", ["auto", "cold"])
+@pytest.mark.parametrize("review", [{}, {"provider": "openai", "model": "gpt-5.4"}])
+def test_review_bounded_tier_is_suppressed_in_final_wire_kwargs(monkeypatch, bounded_tier, review):
+    from agent.fast_mode import begin_turn
+    from hermes_cli.models_service_tiers import bind_aux_slot_service_tier
+    from run_agent import AIAgent
+
+    from agent.review_engine import _load_review_credentials_cfg
+
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: {
+        "agent": {"service_tier": bounded_tier}, "auxiliary": {"review": review},
+    })
+    credentials_cfg = _load_review_credentials_cfg()
+    slot = (credentials_cfg or {}).get("_aux_slot", {})
+    agent = AIAgent(
+        api_key="fixture-only", base_url="https://api.openai.com/v1",
+        provider="openai", api_mode="chat_completions",
+        model=(credentials_cfg or {}).get("model") or "gpt-5.4",
+        service_tier=bounded_tier, quiet_mode=True, skip_context_files=True,
+        skip_memory=True, save_trajectories=False, enabled_toolsets=["file"],
+    )
+    try:
+        bind_aux_slot_service_tier(agent, slot)
+        begin_turn(agent, [])
+        kwargs = agent._build_api_kwargs([{"role": "user", "content": "review"}])
+        assert "service_tier" not in kwargs
+        assert "speed" not in kwargs
+    finally:
+        agent.close()
 
 
 def test_aux_explicit_normal_binding_stops_global_fallback(monkeypatch):
