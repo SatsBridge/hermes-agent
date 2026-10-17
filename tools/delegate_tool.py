@@ -210,6 +210,7 @@ def _build_child_agent(
     # ACP transport overrides from trusted delegation config.
     override_acp_command: Optional[str] = None,
     override_acp_args: Optional[list[str]] = None,
+    auxiliary_slot: Optional[dict[str, Any]] = None,
     # Configuration block that owns the selected provider/model route. Internal
     # callers such as /review pass auxiliary.review here so fallback policy is
     # not accidentally read from the general delegation block.
@@ -301,6 +302,19 @@ def _build_child_agent(
                     release_or_close(child_session_db)
             raise
     child._print_fn = getattr(parent_agent, "_print_fn", None)
+    if isinstance(auxiliary_slot, dict):
+        from hermes_cli.models_service_tiers import (
+            apply_aux_service_tier_overrides, aux_slot_configures_service_tier,
+            bind_aux_slot_service_tier,
+        )
+        if aux_slot_configures_service_tier(auxiliary_slot):
+            runtime = child._current_main_runtime()
+            child.request_overrides = apply_aux_service_tier_overrides(
+                child.request_overrides, auxiliary_slot,
+                model=child.model, provider=child.provider,
+                base_url=runtime.get("base_url"), task="review",
+            )
+            bind_aux_slot_service_tier(child, auxiliary_slot)
     _apply_child_cache_ttl(child)
     if child_session_db is not None:
         child._owns_session_db = True  # released by the child's close(), never by the parent
@@ -424,6 +438,7 @@ def _build_children(
     task_list: list[dict[str, Any]], task_schemas: list[Optional[dict[str, Any]]], creds: dict[str, Any], *,
     top_role: str, max_iterations: int, parent_agent, routing_cfg: dict[str, Any],
     live_deleg_id: Optional[str], live_writers: list, task_images: Optional[list[Optional[list[str]]]] = None,
+    auxiliary_slot: Optional[dict[str, Any]] = None,
 ) -> tuple[list[tuple], Optional[str]]:
     """Build every child on the main thread (construction is not thread-safe);
     ``(children, None)`` or ``([], error)`` on an explicit-pin preflight failure."""
@@ -441,7 +456,8 @@ def _build_children(
                 task_index=i, goal=t["goal"], context=_child_context,
                 toolsets=None,  # always inherit the parent's toolsets
                 model=creds["model"], max_iterations=max_iterations, task_count=len(task_list),
-                parent_agent=parent_agent, role=_normalize_role(t.get("role") or top_role), **overrides,
+                parent_agent=parent_agent, role=_normalize_role(t.get("role") or top_role),
+                auxiliary_slot=auxiliary_slot, **overrides,
             )
         except ValueError as exc:
             return [], str(exc)
@@ -586,6 +602,7 @@ def delegate_task(
     children, err = _build_children(
         task_list, task_schemas, creds, top_role=top_role, max_iterations=default_max_iter, parent_agent=parent_agent,
         routing_cfg=routing_cfg, live_deleg_id=live_deleg_id, live_writers=live_writers, task_images=task_images,
+        auxiliary_slot=credentials_cfg.get("_aux_slot") if credentials_cfg else None,
     )
     if err:
         return tool_error(err)

@@ -6405,24 +6405,11 @@ def _with_custom_endpoint_extra_body(
 def _get_task_extra_body(task: str) -> dict[str, Any]:
     """Shallow copy of ``auxiliary.<task>.extra_body`` with ``reasoning_effort`` folded into
     ``reasoning`` unless one is configured (more specific wins). MoA tasks are excluded: their
-    reasoning depth is per-slot in the preset. ``auxiliary.<task>.service_tier`` is a shorthand
-    for the top-level service-tier request field (OpenRouter ``flex`` / ``priority`` only).
-    Explicit ``extra_body.service_tier`` wins over the shorthand; first-party routes omit it."""
+    reasoning depth is per-slot in the preset. Service tiers are resolved separately after the
+    actual route and fallback model are known."""
     task_config = _get_auxiliary_task_config(task)
     raw = task_config.get("extra_body")
     result = dict(raw) if isinstance(raw, dict) else {}
-    if "service_tier" not in result:
-        configured_tier = task_config.get("service_tier")
-        if configured_tier not in (None, ""):
-            from hermes_constants import parse_service_tier
-            tier = parse_service_tier(configured_tier)
-            if tier in {"flex", "priority"}:
-                result["service_tier"] = tier
-            else:
-                logger.warning(
-                    "auxiliary.%s.service_tier %r is not supported (flex or priority) — ignoring",
-                    task, configured_tier,
-                )
     if "reasoning" in result:
         return result
     effort = task_config.get("reasoning_effort")
@@ -6804,13 +6791,12 @@ def _build_call_kwargs(
     if "response_format" in merged_extra:
         from agent.auxiliary_structured_output import without_unsupported_response_format
         merged_extra = without_unsupported_response_format(merged_extra, provider_norm, effective_base, model, task)
-    if merged_extra:
-        from hermes_cli.models import apply_aux_service_tier_overrides
-
-        lifted = apply_aux_service_tier_overrides(
-            {"extra_body": merged_extra}, None, model=model, provider=provider, base_url=effective_base, task=task)
-        kwargs.update({key: lifted[key] for key in ("service_tier", "speed") if key in lifted})
-        merged_extra = lifted.get("extra_body") or {}
+    from hermes_cli.models_service_tiers import apply_aux_service_tier_overrides
+    lifted = apply_aux_service_tier_overrides(
+        {"extra_body": merged_extra} if merged_extra else {}, _get_auxiliary_task_config(task) if task else None,
+        model=model, provider=provider, base_url=effective_base, task=task)
+    kwargs.update({key: lifted[key] for key in ("service_tier", "speed") if key in lifted})
+    merged_extra = lifted.get("extra_body") or {}
     if merged_extra:
         kwargs["extra_body"] = merged_extra
     # Anthropic Messages adapters take reasoning via a private kwarg that plain OpenAI SDK clients

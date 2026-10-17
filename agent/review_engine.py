@@ -137,8 +137,7 @@ def build_review_task(snapshot: list[dict[str, str]], user_prompt: str = "", loa
 
 
 def _load_review_credentials_cfg() -> Optional[dict[str, Any]]:
-    """``auxiliary.review`` as a delegation-credentials dict, or None when unconfigured (provider auto/empty
-    and no model/base_url) so the reviewer inherits the parent's credentials."""
+    """Resolve ``auxiliary.review`` routing, request-body and tier settings, or None when fully unconfigured."""
     try:
         from hermes_cli.config import load_config_readonly
         review = (load_config_readonly().get("auxiliary") or {}).get("review") or {}
@@ -150,7 +149,17 @@ def _load_review_credentials_cfg() -> Optional[dict[str, Any]]:
     cfg = {k: str(review.get(k) or "").strip() for k in ("provider", "model", "base_url", "api_key", "api_mode")}
     if cfg["provider"].lower() == "auto":
         cfg["provider"] = ""
-    if not (cfg["provider"] or cfg["model"] or cfg["base_url"]):
+    extra_body = review.get("extra_body")
+    if isinstance(extra_body, dict) and extra_body:
+        cfg["request_overrides"] = {"extra_body": dict(extra_body)}
+    tier_configured = review.get("service_tier") not in (None, "") or (
+        isinstance(extra_body, dict) and extra_body.get("service_tier") not in (None, "")
+    )
+    if tier_configured:
+        cfg["_aux_slot"] = {
+            key: review[key] for key in ("service_tier", "extra_body") if key in review
+        }
+    if not (cfg["provider"] or cfg["model"] or cfg["base_url"] or cfg.get("request_overrides") or cfg.get("_aux_slot")):
         return None
     return cfg
 

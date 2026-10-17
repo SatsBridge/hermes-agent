@@ -1478,12 +1478,14 @@ Every model slot in Hermes — auxiliary tasks, compression, fallback — uses t
 | `model` | Which model to request | provider's default |
 | `base_url` | Custom OpenAI-compatible endpoint (overrides provider) | not set |
 
-Auxiliary task blocks additionally accept a `reasoning_effort` knob and an OpenRouter-only `service_tier` shortcut:
+Auxiliary task blocks additionally accept `reasoning_effort` and a route-aware `service_tier` override:
 
 | Key | What it does | Default |
 |-----|-------------|---------|
 | `reasoning_effort` | Thinking level for that task's LLM calls: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` | not set (provider default) |
-| `service_tier` | OpenRouter queue: `flex` or `priority`. Applied after the slot's runtime resolves. First-party routes ignore it. | not set |
+| `service_tier` | Static tier for that task, mapped through the same provider/model capability checks as [Fast Mode](#fast-mode). If unset, `agent.service_tier_overrides` for the resolved model, then `agent.service_tier`, apply. | not set |
+
+Tier precedence is `auxiliary.<task>.extra_body.service_tier` > `auxiliary.<task>.service_tier` > per-model agent override > global agent tier. An explicit `normal`/`default` disables lower-priority tiers; empty means unset. Unsupported provider/model combinations omit the derived tier. `auto` and `cold` are main-turn windows and do not create an auxiliary-call tier; temporary session `/fast` pins are not inherited by ordinary child, cron, or background work. A task-level setting still beats agent-level fallback, so a background task can remain standard while the main session uses a premium tier.
 
 This is the per-task counterpart of the global `agent.reasoning_effort`: run compression at `low` or vision at `none` to cut side-task latency and cost when your main model is an expensive reasoning model, without touching your main chat behavior. It applies to auxiliary-client tasks such as `vision`, `compression`, `title_generation`, and `curator`, across all three auxiliary wire formats (chat completions, Codex Responses, Anthropic Messages). An explicit `extra_body.reasoning` on the same task wins over the shorthand. A caller that turns thinking off for its own call (title generation does — a 64-token title has no room for reasoning) wins over both: the task-level effort is dropped for that request instead of being sent beside the provider's thinking-off field.
 
