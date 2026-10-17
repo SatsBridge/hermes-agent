@@ -948,6 +948,62 @@ def test_curator_final_api_kwargs_extra_body_beats_slot_tier(monkeypatch):
         agent.close()
 
 
+@pytest.mark.parametrize("resolver_fails", [False, True])
+@pytest.mark.parametrize(
+    ("local_tier", "expected"),
+    [("normal", None), (None, "flex")],
+)
+def test_curator_slot_tier_survives_runtime_resolution_failure(monkeypatch, resolver_fails, local_tier, expected):
+    """The real curator fork applies local tier intent even when runtime lookup falls back."""
+    from run_agent import AIAgent
+
+    from agent.curator import _run_llm_review
+
+    slot = {"provider": "openai", "model": "gpt-5.4"}
+    if local_tier:
+        slot["service_tier"] = local_tier
+    else:
+        slot["extra_body"] = {"service_tier": "flex"}
+    cfg = {
+        "agent": {"service_tier": "priority"},
+        "model": {"provider": "openai", "default": "gpt-5.4"},
+        "auxiliary": {"curator": slot},
+    }
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: cfg)
+
+    def resolve_runtime_provider(**_kwargs):
+        if resolver_fails:
+            raise RuntimeError("offline")
+        return {
+            "provider": "openai", "model": "gpt-5.4", "api_key": "fixture-key",
+            "base_url": "https://api.openai.com/v1", "api_mode": "chat_completions",
+            "request_overrides": {},
+        }
+
+    monkeypatch.setattr("hermes_cli.runtime_provider.resolve_runtime_provider", resolve_runtime_provider)
+    captured = {}
+    real_agent = AIAgent
+
+    def _capturing(*args, **kwargs):
+        if not kwargs.get("api_key"):
+            kwargs.update(provider="openai", api_key="fixture-key", base_url="https://api.openai.com/v1")
+        agent = real_agent(*args, **kwargs)
+        captured["agent"] = agent
+        agent.run_conversation = lambda *_a, **_k: {"final_response": "ok", "messages": []}
+        return agent
+
+    monkeypatch.setattr("run_agent.AIAgent", _capturing)
+    result = _run_llm_review("review skills")
+    agent = captured["agent"]
+    try:
+        kwargs = agent._build_api_kwargs([{"role": "user", "content": "review"}])
+        assert result["error"] is None
+        assert kwargs.get("service_tier") == expected
+        assert agent._service_tier_session_pinned is True
+    finally:
+        agent.close()
+
+
 def test_review_runtime_strips_blank_aux_credentials(curator_env):
     curator = curator_env["curator"]
     cfg = {
