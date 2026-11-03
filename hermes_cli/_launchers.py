@@ -46,7 +46,14 @@ def runtime_command(repo_root: Path, args=(), *, module: str = "hermes_cli.main"
     No selected generation or ambient PYTHONPATH is captured in the command.
     """
     root = Path(repo_root).resolve()
-    python = python or resolve_store_python(root) or Path(sys.executable)
+    # Nix sets HERMES_PYTHON to the interpreter whose site-packages hold the dependencies.
+    # sys.executable alone can be a bare interpreter, and the child drops PYTHONPATH.
+    python = (
+        python
+        or resolve_store_python(root)
+        or os.environ.get("HERMES_PYTHON")
+        or Path(sys.executable)
+    )
     entry = f"exec({_inline_string_literal(code)})" if code is not None else (
         f"runpy.run_module({_inline_string_literal(module)}, run_name='__main__', alter_sys=True)")
     # A literal home is pinned up front; the default one needs ``hermes_constants`` from the
