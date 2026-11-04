@@ -576,7 +576,7 @@ def test_slash_exec_accepts_bounded_modes_on_supported_route(mode, monkeypatch):
 
 
 def test_slash_exec_uses_live_route_before_worker_can_write_profile_config(monkeypatch, tmp_path):
-    import yaml
+    import hermes_yaml as yaml
     from tui_gateway.slash_worker import _run as run_slash_worker
     from hermes_cli.cli_fast_mode_mixin import handle_fast_command
 
@@ -613,7 +613,7 @@ def test_slash_exec_uses_live_route_before_worker_can_write_profile_config(monke
 
 
 def test_slash_exec_global_fast_updates_config_on_live_eligible_route(monkeypatch, tmp_path):
-    import yaml
+    import hermes_yaml as yaml
 
     home = _configure_profile_route(monkeypatch, tmp_path, "openai-api", None)
     agent = SimpleNamespace(

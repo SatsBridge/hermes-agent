@@ -171,7 +171,7 @@ def test_compute_host_fast_global_persists_config_and_reports_scope(monkeypatch,
 
     ack = _slash(monkeypatch, session, "/fast flex --global")["result"]
 
-    import yaml
+    import hermes_yaml as yaml
     assert yaml.safe_load(config_path.read_text(encoding="utf-8")) == {"agent": {"service_tier": "flex"}}
     assert "global" in ack["output"].lower()
     assert session.get("create_service_tier_override") is None
