@@ -195,6 +195,7 @@ gateway:
     choice_auto: "auto — schnell in den ersten Sekunden jedes Zugs"
     choice_cold: "cold — schnell nur im ersten Zug einer Sitzung"
     choice_ultrafast: "ultrafast — OpenAI Ultrafast, 6-facher Preis"
+    choice_flex: "flex — günstigere Verarbeitung bei OpenAI und Gemini"
     ultrafast_not_supported: "⚡ Ultrafast ist für `{model}` mit diesem Konto oder dieser Route nicht verfügbar."
   footer:
     status: "📎 Laufzeit-Fußzeile: **{state}**\nFelder: `{fields}`\nPlattform: `{platform}`"
@@ -2716,6 +2717,7 @@ cli:
       feature_anthropic: "Anthropic Fast Mode"
       feature_openai: "Priority Processing"
       feature_ultrafast: "OpenAI Ultrafast"
+      feature_flex: "Flex Processing"
       ultrafast_not_supported: "(._.) Ultrafast ist für {model} mit diesem Konto oder dieser Route nicht verfügbar."
       usage: "Verwendung: /fast [normal|fast|auto|cold|ultrafast|status] [--global]"
       status: "{feature}: {status}"

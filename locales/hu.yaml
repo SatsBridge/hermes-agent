@@ -198,6 +198,7 @@ gateway:
     choice_auto: "auto — gyors minden kör első másodperceiben"
     choice_cold: "cold — gyors csak a munkamenet első körében"
     choice_ultrafast: "ultrafast — OpenAI Ultrafast, hatszoros ár"
+    choice_flex: "flex — olcsóbb feldolgozás OpenAI és Gemini esetén"
     ultrafast_not_supported: "⚡ Az Ultrafast nem érhető el a(z) `{model}` modellhez ezen a fiókon vagy útvonalon."
   footer:
     status: "📎 Futási idejű lábléc: **{state}**\nMezők: `{fields}`\nPlatform: `{platform}`"
@@ -2733,6 +2734,7 @@ cli:
       feature_anthropic: "Anthropic Fast Mode"
       feature_openai: "Priority Processing"
       feature_ultrafast: "OpenAI Ultrafast"
+      feature_flex: "Flex Processing"
       ultrafast_not_supported: "(._.) Az Ultrafast nem érhető el a(z) {model} modellhez ezen a fiókon vagy útvonalon."
       usage: "Használat: /fast [normal|fast|auto|cold|ultrafast|status] [--global]"
       status: "{feature}: {status}"

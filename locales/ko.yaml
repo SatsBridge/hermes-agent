@@ -195,6 +195,7 @@ gateway:
     choice_auto: "auto — 매 턴의 처음 몇 초 동안 빠름"
     choice_cold: "cold — 세션의 첫 턴에만 빠름"
     choice_ultrafast: "ultrafast — OpenAI Ultrafast, 가격 6배"
+    choice_flex: "flex — OpenAI 및 Gemini의 저비용 처리"
     ultrafast_not_supported: "⚡ 이 계정 또는 경로에서는 `{model}`에 Ultrafast를 사용할 수 없습니다."
   footer:
     status: "📎 런타임 푸터: **{state}**\n필드: `{fields}`\n플랫폼: `{platform}`"
@@ -2716,6 +2717,7 @@ cli:
       feature_anthropic: "Anthropic Fast Mode"
       feature_openai: "Priority Processing"
       feature_ultrafast: "OpenAI Ultrafast"
+      feature_flex: "Flex Processing"
       ultrafast_not_supported: "(._.) 이 계정 또는 경로에서는 {model}에 Ultrafast를 사용할 수 없습니다."
       usage: "사용법: /fast [normal|fast|auto|cold|ultrafast|status] [--global]"
       status: "{feature}: {status}"

@@ -195,6 +195,7 @@ gateway:
     choice_auto: "auto — tapa do na chéad soicindí de gach seal"
     choice_cold: "cold — tapa don chéad seal de sheisiún amháin"
     choice_ultrafast: "ultrafast — OpenAI Ultrafast, praghas x6"
+    choice_flex: "flex — próiseáil níos saoire ar OpenAI agus Gemini"
     ultrafast_not_supported: "⚡ Níl Ultrafast ar fáil do `{model}` ar an gcuntas nó ar an mbealach seo."
   footer:
     status: "📎 Buntásc rite: **{state}**\nRéimsí: `{fields}`\nArdán: `{platform}`"
@@ -2716,6 +2717,7 @@ cli:
       feature_anthropic: "Anthropic Fast Mode"
       feature_openai: "Priority Processing"
       feature_ultrafast: "OpenAI Ultrafast"
+      feature_flex: "Flex Processing"
       ultrafast_not_supported: "(._.) Níl Ultrafast ar fáil do {model} ar an gcuntas nó ar an mbealach seo."
       usage: "Úsáid: /fast [normal|fast|auto|cold|ultrafast|status] [--global]"
       status: "{feature}: {status}"
