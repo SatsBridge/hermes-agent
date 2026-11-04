@@ -220,7 +220,7 @@ def test_stale_claim_reclaim_event_records_diagnostic_payload(
 
     with kbc.connect() as conn:
         t = kb.create_task(conn, title="x", assignee="a")
-        host = _kb._claimer_id().split(":", 1)[0]
+        host = _kb._claimer_id().rsplit(":", 1)[0]
         kb.claim_task(conn, t, claimer=f"{host}:worker")
         kbd._set_worker_pid(conn, t, 12345)
         old_expires = int(time.time()) - 3600
@@ -253,7 +253,7 @@ def test_stale_claim_reclaim_without_spawn_counts_toward_breaker(kanban_home):
     claim -> reclaim -> claim forever."""
     with kbc.connect() as conn:
         t = kb.create_task(conn, title="never spawned", assignee="a")
-        host = kb._claimer_id().split(":", 1)[0]
+        host = kb._claimer_id().rsplit(":", 1)[0]
         for expected in (1, 2):
             kb.claim_task(conn, t, claimer=f"{host}:worker")
             # No _set_worker_pid: the claimer never spawned a worker.
@@ -282,7 +282,7 @@ def test_stale_claim_extend_live_worker_does_not_count_failure(
 
     with kbc.connect() as conn:
         t = kb.create_task(conn, title="live worker", assignee="a")
-        host = _kb._claimer_id().split(":", 1)[0]
+        host = _kb._claimer_id().rsplit(":", 1)[0]
         kb.claim_task(conn, t, claimer=f"{host}:worker")
         kbd._set_worker_pid(conn, t, 12345)
         old_expires = int(time.time()) - 3600
@@ -334,7 +334,7 @@ def test_rate_limit_exit_requeues_without_counting_failure(
     monkeypatch.setenv("HERMES_KANBAN_CRASH_GRACE_SECONDS", "0")
 
     with kbc.connect() as conn:
-        host = _kb._claimer_id().split(":", 1)[0]
+        host = _kb._claimer_id().rsplit(":", 1)[0]
         tid = kb.create_task(conn, title="rl", assignee="a")
 
         # Simulate FAR more quota-wall hits than DEFAULT_FAILURE_LIMIT (2).
@@ -397,7 +397,7 @@ def test_terminal_provider_exit_blocks_after_one_attempt_in_either_lane(kanban_h
     monkeypatch.setenv("HERMES_KANBAN_CRASH_GRACE_SECONDS", "0")
 
     with kbc.connect() as conn:
-        host = _kb._claimer_id().split(":", 1)[0]
+        host = _kb._claimer_id().rsplit(":", 1)[0]
         tid = kb.create_task(conn, title="terminal", assignee="a", max_retries=5)
         claimed = kb.claim_task(conn, tid, claimer=f"{host}:w0")
         if lane == "review":
@@ -2038,7 +2038,7 @@ def test_archive_running_task_terminates_worker(kanban_home, monkeypatch):
 
     with kbc.connect() as conn:
         t = kb.create_task(conn, title="x", assignee="a")
-        host = kb._claimer_id().split(":", 1)[0]
+        host = kb._claimer_id().rsplit(":", 1)[0]
         kb.claim_task(conn, t, claimer=f"{host}:worker")
         # A verified spawn: an uncaptured fingerprint would (correctly) refuse the signal.
         monkeypatch.setattr(kbd, "_process_fingerprint", lambda _pid: "boot:1|777")

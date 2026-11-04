@@ -146,3 +146,46 @@ def test_claim_reclaimed_before_admission_marker_is_refused(tmp_path, monkeypatc
     assert calls == []
     with closing(connect(board='owned')) as conn:
         assert conn.execute("SELECT count(*) FROM task_events WHERE task_id=? AND kind='owner_admitted'", (task_id,)).fetchone()[0] == 0
+
+
+def _alias_claim(tmp_path, monkeypatch, assignee):
+    """A claim for ``assignee`` on an owner whose home declares ``kanban.agent_profile_name: sage``
+    and has no ``profiles/`` directory (the NixOS layout of one agent per home)."""
+    from contextlib import closing
+    from hermes_cli import kanban_db as kb
+    from hermes_cli.kanban_db_connect import connect
+    from gateway.session_contract import Principal
+    monkeypatch.setenv('HERMES_KANBAN_HOME', str(tmp_path))
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    monkeypatch.delenv('HERMES_KANBAN_DB', raising=False)
+    monkeypatch.delenv('HERMES_DELEGATED_CHILD', raising=False)
+    (tmp_path / 'config.yaml').write_text('kanban:\n  agent_profile_name: sage\n', encoding='utf-8')
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    kb.create_board('owned')
+    with closing(connect(board='owned')) as conn:
+        task_id = kb.create_task(conn, title='Alias card', assignee=assignee,
+                                 workspace_kind='dir', workspace_path=str(workspace))
+        kb.recompute_ready(conn)
+        task = kb.claim_task(conn, task_id)
+    actor = Principal('owner', str(tmp_path), frozenset({'session:create'}), 'transport')
+    connection = SimpleNamespace(authority=SimpleNamespace(profile_id=str(tmp_path)), actor=actor, native_owner=True)
+    params = dict(board='owned', task_id=task.id, run_id=task.current_run_id, claim_lock=task.claim_lock)
+    config = {'model': {'default': 'loop-model', 'provider': 'custom'}, 'platform_toolsets': {'cli': ['terminal']}}
+    return connection, params, config
+
+
+def test_owner_admits_card_for_its_declared_identity_alias(tmp_path, monkeypatch):
+    from gateway.session_kanban import build_kanban_policy
+    connection, params, config = _alias_claim(tmp_path, monkeypatch, 'sage')
+    policy, _secrets = build_kanban_policy(connection, params, config)
+    assert policy.source == 'kanban' and json.loads(policy.kanban_json)['profile'] == 'sage'
+
+
+def test_owner_refuses_missing_profile_that_is_not_its_alias(tmp_path, monkeypatch):
+    from gateway.session_kanban import build_kanban_policy
+    from hermes_state_runtime import RuntimeStoreError
+    connection, params, config = _alias_claim(tmp_path, monkeypatch, 'stranger')
+    with pytest.raises(RuntimeStoreError, match='invalid_kanban_claim'):
+        build_kanban_policy(connection, params, config)

@@ -176,7 +176,13 @@ def _stored_session_runtime_overrides(row: dict | None) -> dict:
         overrides["provider_override"] = provider
     if isinstance(reasoning_config, dict):
         overrides["reasoning_config_override"] = reasoning_config
-    if service_tier:  # None = "inherit the profile" at _make_agent; "" = real override "no priority tier"
+    # New rows mark pins explicitly and omit inherited tiers. Before that marker,
+    # the stored value is the only evidence of the tier the session last used;
+    # keep restoring it to avoid a silent route/tariff change on upgrade.
+    if service_tier and (
+        model_config.get("service_tier_session_pinned") is True
+        or "service_tier_session_pinned" not in model_config
+    ):
         overrides["service_tier_override"] = "" if service_tier.lower() == "normal" else service_tier
     return overrides
 
@@ -200,17 +206,24 @@ def _runtime_model_config(agent, existing: dict | None = None) -> dict:
     from hermes_cli.runtime_provider_custom import session_provider_identity
     provider = session_provider_identity(attr("provider"), attr("requested_provider"), base_url, model)
     reasoning_config = getattr(agent, "reasoning_config", None)
+    pinned = getattr(agent, "_service_tier_session_pinned", False) is True
     live = {
         "model": model, "provider": provider, "base_url": base_url, "api_mode": attr("api_mode"),
         # An empty dict is still a real (present) reasoning config.
         "reasoning_config": reasoning_config if isinstance(reasoning_config, dict) else None,
-        "service_tier": getattr(agent, "service_tier", None),
+        # * Persist the wire value only for an explicit session pin; unpinned
+        # agents inherit per-model/global resolution on resume.
+        "service_tier": (getattr(agent, "service_tier", None) or "normal") if pinned else None,
     }
     for key, value in live.items():
         if value or isinstance(value, dict):
             config[key] = value
         else:
             config.pop(key, None)
+    if pinned:
+        config["service_tier_session_pinned"] = True
+    else:
+        config.pop("service_tier_session_pinned", None)
     return config
 
 
@@ -655,6 +668,33 @@ def _make_agent(
     ignore_rules = is_truthy_value(os.environ.get("HERMES_IGNORE_RULES"))
     with _sessions_lock:
         session = _sessions.get(sid)
+    # Resolve the tier once: the transport emits ``service_tier`` only from
+    # ``request_overrides``, so setting ``service_tier=`` alone left the
+    # configured tier stranded on the agent and never sent it. Without this,
+    # a tier only ever reached the wire via the runtime ``/fast`` toggle.
+    _effective_tier = (
+        service_tier_override if service_tier_override is not None else _load_service_tier()
+    )
+    _tier_overrides = None
+    # Only pinnable tiers are bridged (parity with the CLI/gateway route builders):
+    # auto/cold are bounded windows applied per request by agent.fast_mode, so pinning
+    # them here would bill a fixed tier the user never chose. The resolver's
+    # _SUPPORTED_SERVICE_TIERS whitelist backstops this, but the gate keeps intent local.
+    if _effective_tier in ("priority", "ultrafast", "flex"):
+        from hermes_cli.models import resolve_service_tier_overrides
+
+        try:
+            _tier_overrides = resolve_service_tier_overrides(
+                model, _effective_tier, provider=runtime.get("provider"), base_url=runtime.get("base_url"))
+            if _effective_tier == "ultrafast" and _tier_overrides is not None:
+                from agent.codex_service_tiers import ultrafast_offered
+                if not ultrafast_offered(model, provider=runtime.get("provider"),
+                                         base_url=runtime.get("base_url"),
+                                         access_token=runtime.get("api_key")):
+                    _tier_overrides = None
+        except Exception:
+            logger.debug("could not resolve configured service tier for TUI agent build", exc_info=True)
+            _tier_overrides = None
     agent = AIAgent(
         model=model, max_iterations=_cfg_max_turns(cfg, 500), provider=runtime.get("provider"),
         requested_provider=runtime.get("requested_provider"),
@@ -680,9 +720,16 @@ def _make_agent(
         checkpoints_enabled=_resolve_checkpoints_enabled(cfg),
         pass_session_id=is_truthy_value(os.environ.get("HERMES_TUI_PASS_SESSION_ID")),
         skip_context_files=ignore_rules, skip_memory=ignore_rules, fallback_model=_load_fallback_model(),
-        # The resolved provider's request body (a custom entry's extra_body), as the CLI/cron/gateway pass it.
-        request_overrides=runtime.get("request_overrides"),
+        # The resolved provider's request body (a custom entry's extra_body), as the CLI/cron/gateway
+        # pass it, with the resolved tier's wire keys merged on top (#127015: whichever of the two
+        # landed second merges the dicts). The tier writes only its own top-level keys
+        # (service_tier / speed), so the entry's extra_body passes through untouched.
+        request_overrides={**(runtime.get("request_overrides") or {}), **(_tier_overrides or {})} or None,
         prefill_messages=_load_prefill_messages() or None, **_agent_cbs(sid))
+    agent._service_tier_session_pinned = service_tier_override is not None
+    from agent.fast_mode import set_framework_baked_tier_keys
+
+    set_framework_baked_tier_keys(agent, _tier_overrides)
     if context_cwd_is_launch_artifact is None:
         context_cwd_is_launch_artifact = _context_cwd_is_launch_artifact(session)
     agent._context_cwd_is_launch_artifact = bool(context_cwd_is_launch_artifact)

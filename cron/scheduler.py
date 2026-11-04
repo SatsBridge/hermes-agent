@@ -2481,7 +2481,7 @@ def _resolve_cron_agent_setup(job: dict, job_id: str, job_name: str, jc) -> _Cro
 def _construct_cron_agent(AIAgent, job: dict, _cfg: dict, setup: _CronAgentSetup, *, workdir, session_id, session_db):
     runtime = setup.runtime
     pr = _cfg.get("provider_routing") or {}
-    return AIAgent(
+    agent = AIAgent(
         model=setup.model,
         api_key=runtime.get("api_key"),
         base_url=runtime.get("base_url"),
@@ -2513,6 +2513,10 @@ def _construct_cron_agent(AIAgent, job: dict, _cfg: dict, setup: _CronAgentSetup
         session_id=session_id,
         session_db=session_db,
     )
+    # * Same explicit block as batch_runner and /bg: platform="cron" is not
+    # the only gate if an enabled config is bound from disk.
+    agent._block_service_tier_escalation = True
+    return agent
 
 
 class _FireAudit:
@@ -3621,8 +3625,9 @@ def _launch_external_cron_worker(job: dict) -> bool:
     ack_path = handoff_dir / f"{execution_id}.ready"
     # Captured so a worker that dies before its acknowledgement can name the cause (#112729).
     stderr_path = handoff_dir / f"{execution_id}.stderr"
+    from hermes_constants import module_python
     command = [
-        sys.executable,
+        module_python(),
         "-m",
         "cron.scheduler",
         "--external-worker-file",

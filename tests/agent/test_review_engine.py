@@ -128,6 +128,59 @@ def test_load_review_credentials_cfg_auto_means_inherit(monkeypatch):
     )
     assert re_mod._load_review_credentials_cfg() is None
 
+
+@pytest.mark.parametrize("review", [
+    {"service_tier": "priority"},
+    {"extra_body": {"service_tier": "flex", "store": False}},
+])
+def test_load_review_credentials_cfg_keeps_tier_only_aux_slot(monkeypatch, review):
+    monkeypatch.setattr(
+        "hermes_cli.config.load_config_readonly",
+        lambda: {"auxiliary": {"review": review}},
+    )
+    cfg = re_mod._load_review_credentials_cfg()
+    assert cfg["_aux_slot"] == review
+    assert cfg.get("request_overrides") == (
+        {"extra_body": review["extra_body"]} if "extra_body" in review else None
+    )
+
+
+def test_start_review_passes_tier_only_slot_to_delegation(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "hermes_cli.config.load_config_readonly",
+        lambda: {"auxiliary": {"review": {"service_tier": "priority"}}},
+    )
+
+    def fake_delegate_task(**kwargs):
+        captured.update(kwargs)
+        return json.dumps({"status": "dispatched", "delegation_id": "review-test"})
+
+    monkeypatch.setattr("tools.delegate_tool.delegate_task", fake_delegate_task)
+    result = start_review(
+        _fake_parent(), [{"role": "user", "content": "review this"}],
+    )
+    assert result["status"] == "dispatched"
+    assert captured["credentials_cfg"]["_aux_slot"] == {"service_tier": "priority"}
+    assert captured["auxiliary_slot"] == {"service_tier": "priority"}
+
+
+@pytest.mark.parametrize("review", [{}, {"provider": "openai", "model": "gpt-5.4"}])
+def test_start_review_passes_aux_identity_without_local_tier(monkeypatch, review):
+    captured = {}
+    monkeypatch.setattr(
+        "hermes_cli.config.load_config_readonly",
+        lambda: {"auxiliary": {"review": review}},
+    )
+
+    def fake_delegate_task(**kwargs):
+        captured.update(kwargs)
+        return json.dumps({"status": "dispatched", "delegation_id": "review-test"})
+
+    monkeypatch.setattr("tools.delegate_tool.delegate_task", fake_delegate_task)
+    start_review(_fake_parent(), [{"role": "user", "content": "review this"}])
+    assert captured["auxiliary_slot"] == {}
+
 def test_load_review_credentials_cfg_missing_section(monkeypatch):
     monkeypatch.setattr(
         "hermes_cli.config.load_config_readonly", lambda: {"auxiliary": {}}

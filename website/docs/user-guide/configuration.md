@@ -1576,11 +1576,14 @@ Every model slot in Hermes — auxiliary tasks, compression, fallback — uses t
 | `model` | Which model to request | provider's default |
 | `base_url` | Custom OpenAI-compatible endpoint (overrides provider) | not set |
 
-Auxiliary task blocks additionally accept a `reasoning_effort` knob:
+Auxiliary task blocks additionally accept `reasoning_effort` and a route-aware `service_tier` override:
 
 | Key | What it does | Default |
 |-----|-------------|---------|
 | `reasoning_effort` | Thinking level for that task's LLM calls: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` | not set (provider default) |
+| `service_tier` | Static tier for that task, mapped through the same provider/model capability checks as [Fast Mode](#fast-mode). If unset, `agent.service_tier_overrides` for the resolved model, then `agent.service_tier`, apply. | not set |
+
+Tier precedence is `auxiliary.<task>.extra_body.service_tier` > `auxiliary.<task>.service_tier` > per-model agent override > global agent tier. An explicit `normal`/`default` disables lower-priority tiers; empty means unset. Unsupported provider/model combinations omit the derived tier. `auto` and `cold` are main-turn windows and do not create an auxiliary-call tier; temporary session `/fast` pins are not inherited by ordinary child, cron, or background work. A task-level setting still beats agent-level fallback, so a background task can remain standard while the main session uses a premium tier.
 
 This is the per-task counterpart of the global `agent.reasoning_effort`: run compression at `low` or vision at `none` to cut side-task latency and cost when your main model is an expensive reasoning model, without touching your main chat behavior. It applies to auxiliary-client tasks such as `vision`, `compression`, `title_generation`, and `curator`, across all three auxiliary wire formats (chat completions, Codex Responses, Anthropic Messages). An explicit `extra_body.reasoning` on the same task wins over the shorthand. A caller that turns thinking off for its own call (title generation does — a 64-token title has no room for reasoning) wins over both: the task-level effort is dropped for that request instead of being sent beside the provider's thinking-off field.
 
@@ -2067,24 +2070,29 @@ The override applies automatically everywhere: CLI startup, `hermes -p` one-shot
 
 ## Fast Mode
 
-Fast mode asks the provider for faster output at a premium price: OpenAI [Priority Processing](https://openai.com/api-priority-processing/) (`service_tier: priority`) and Ultrafast (`service_tier: ultrafast`) on supported OpenAI models, xAI Priority Processing on Grok 4.6, and Anthropic [Fast Mode](https://platform.claude.com/docs/en/build-with-claude/fast-mode) (`speed: fast`, Opus 4.8 / Opus 5 / Opus 5.5 only). The `openai` and `openai-api` providers use the first-party OpenAI endpoint. It is **off by default**.
+Fast mode selects a provider tier: OpenAI [Priority Processing](https://openai.com/api-priority-processing/) (`service_tier: priority`), lower-cost Flex (`service_tier: flex`) on eligible OpenAI and Gemini models, and Ultrafast (`service_tier: ultrafast`) on supported OpenAI models; xAI Priority Processing on Grok 4.6; or Anthropic [Fast Mode](https://platform.claude.com/docs/en/build-with-claude/fast-mode) (`speed: fast`, Opus 4.8 / Opus 5 / Opus 5.5 only). OpenRouter accepts `priority` and `flex` for any catalog model. Gemini Flex is limited to Gemini 2.5+ and is sent as a top-level `service_tier` field. The `openai` and `openai-api` providers use the first-party OpenAI endpoint. It is **off by default**.
 
 ```yaml
 agent:
-  service_tier: ""          # "" / normal | fast | priority | ultrafast | auto | cold
+  service_tier: ""          # "" / normal | fast | priority | flex | ultrafast | auto | cold
   fast_auto_seconds: 60     # window for auto / cold
+  # Per-model overlay (spelling-tolerant). Request-time; no /model resync needed.
+  # service_tier_overrides:
+  #   "openai/gpt-5": "flex"
+  service_tier_overrides: {}
 ```
 
 | Mode | When fast params are sent | Use it for |
 |------|---------------------------|------------|
 | `normal` (default, `""`) | Never | Cheapest; standard latency |
 | `fast` | Every request | Long interactive sessions where you always want speed |
+| `flex` | Every request, on OpenRouter, eligible OpenAI, or Gemini 2.5+ routes | Lower-cost processing when latency is less important |
 | `auto` | Requests in the first `fast_auto_seconds` of **every** turn | Snappy first reply; long tool loops fall back to standard pricing |
 | `cold` | Same window, but only on the **first turn** of a session (no prior history) | Fast onboarding reply, standard pricing afterwards |
 
-`/fast normal|fast|ultrafast|auto|cold` switches the mode for the session (`/fast ultra` is shorthand for `ultrafast`). On a ChatGPT/Codex subscription, Ultrafast is offered only when your account's Codex model catalog lists it for the current model; the backend otherwise accepts the request and serves standard speed. Add `--global` to persist to `config.yaml`. `/fast` alone shows the current mode.
+`/fast normal|fast|flex|ultrafast|auto|cold` switches the mode for the session (`/fast ultra` is shorthand for `ultrafast`). OpenRouter supports `priority` and `flex` across its catalog; first-party routes still require model/route eligibility. Unsupported selections are not converted to a different tier. On a ChatGPT/Codex subscription, Ultrafast is offered only when your account's Codex model catalog lists it for the current model; the backend otherwise accepts the request and serves standard speed. Add `--global` to persist to `config.yaml`. `/fast` alone shows the current mode.
 
-**Cost note:** both providers bill fast requests at a multiplier on standard rates (Anthropic: $8 / $40 per MTok in/out on Opus 5.5, $10 / $50 on Opus 5 and Opus 4.8), stacking with prompt-cache pricing. Hermes prices each Anthropic response from the speed the API reports in `usage.speed`. `auto`/`cold` bound that premium to the window only. Fast params are only sent to the first-party endpoint that supports them (`api.openai.com` / Codex subscription, `api.anthropic.com`, `api.x.ai`); OpenRouter, Nous Portal, Azure, Bedrock, and custom `base_url` routes never receive them in any mode.
+**Cost note:** premium tiers can cost more than standard (Anthropic: $8 / $40 per MTok in/out on Opus 5.5, $10 / $50 on Opus 5 and Opus 4.8), stacking with prompt-cache pricing; Flex is the lower-cost provider option where supported. Hermes prices each Anthropic response from the speed the API reports in `usage.speed`. `auto`/`cold` bound the premium tier to the window only. OpenRouter receives its documented `service_tier` values; other aggregators, proxies, and custom `base_url` routes do not receive derived first-party tier values.
 
 **Prompt cache:** only the per-request parameter changes between requests; the system prompt, tools, and messages stay byte-identical. Anthropic keeps a separate prompt cache for each speed, so on Anthropic every `auto`/`cold` window boundary re-writes the conversation prefix at the new speed. For long Anthropic sessions, `fast` or `normal` keeps a single warm cache.
 
@@ -2094,7 +2102,7 @@ When an Anthropic organization has no fast-mode capacity for a model (the API an
 
 ### Fast tiers behind a gateway or proxy
 
-The first-party-only rule is deliberate: a fast-tier parameter is a billing instruction, and Hermes only sends it to the endpoint whose price list it knows. If you run an OpenAI-compatible gateway, router, or proxy that exposes its own priority tier (its own `service_tier` value, or a differently named field), request it through that provider's `extra_body` instead of `agent.service_tier`. `extra_body` on a [named custom provider](../integrations/providers.md#named-custom-providers) is merged into **every** chat-completions request routed to that endpoint, survives gateway turns and `/fast` changes, and is dropped again when you `/model` away from the provider:
+OpenRouter's `priority` and `flex` tiers are sent through `agent.service_tier` for any catalog model. For another OpenAI-compatible gateway or proxy that exposes its own priority tier (its own `service_tier` value, or a differently named field), request it through that provider's `extra_body` instead. `extra_body` on a [named custom provider](../integrations/providers.md#named-custom-providers) is merged into **every** chat-completions request routed to that endpoint, survives gateway turns and `/fast` changes, and is dropped again when you `/model` away from the provider:
 
 ```yaml
 providers:
@@ -2106,7 +2114,25 @@ providers:
       service_tier: priority     # whatever tier value your gateway documents
 ```
 
-Differences from `agent.service_tier`: the tier is always on for that provider (no `auto`/`cold` window), `/fast` does not toggle it, and Hermes does not validate the value — the gateway decides what it accepts and what it bills.
+Differences from `agent.service_tier`: the custom tier is always on for that provider (no `auto`/`cold` window), `/fast` does not toggle it, and Hermes does not validate the value — the gateway decides what it accepts and what it bills.
+
+#### Per-turn tier escalation (opt-in)
+
+`agent.service_tier_escalation` lets a turn that starts on a cheaper OpenRouter tier climb when the provider is slow. While streaming, Hermes measures time-to-first-token (TTFT) on each main-conversation request; when TTFT exceeds `ttft_threshold_seconds` on `consecutive_slow_requests` successful streams in a row, the agent climbs one tier (flex → default → priority) for the **rest of that turn**. The next user message starts again at the configured base (session pin > per-model overlay > global). Escalation overlays the wire tier at request time and never mutates canonical `agent.service_tier` / `request_overrides`.
+
+```yaml
+agent:
+  service_tier_escalation:
+    enabled: true                  # default: false
+    ttft_threshold_seconds: 8.0
+    consecutive_slow_requests: 1   # raise for a softer trigger
+```
+
+Escalation never fires while a session `/fast` pin is active, and never applies to cron jobs, batch runs, subagents, curator runs, or background tasks (CLI `/bg`, gateway `/bg`, TUI background, post-turn background review). Provider errors are not escalation input. Retried or interrupted requests don't count as slow observations, and a retry of the same logical request always runs on the tier that attempt started with. Provider fallback rebases the ladder onto the new model's base tier while keeping climbed rungs and the slow-streak.
+
+When disabled (the default) there are no clock reads and no observation stack on the streaming path; the collector import itself is cheap, and a single None-check runs per streamed delta.
+
+Known limitations (conservative under-escalation; do not treat as bugs): the non-streaming fallback path produces no observation; Codex streaming is not timed; length-continuation and compression/redirect restarts drop the in-flight sample. Escalation state is per-agent, never copied to delegated children, and never persisted to SessionDB. Escalations are logged at INFO (`agent.log`). The setting is picked up when an agent is constructed (new CLI/TUI session, new gateway agent). Cached gateway agents keep the construction-time value.
 
 ## Tool-Use Enforcement
 
@@ -3140,7 +3166,7 @@ delegation:
 
 **Direct endpoint override:** If you want the obvious custom-endpoint path, set `delegation.base_url`, `delegation.api_key`, and `delegation.model`. That sends subagents directly to that OpenAI-compatible endpoint and takes precedence over `delegation.provider`. If `delegation.api_key` is omitted, Hermes falls back to `OPENAI_API_KEY` only. When `delegation.provider` is set alongside `delegation.base_url`, the explicit endpoint and key still win, but that provider's request settings (`extra_body` overrides and max output tokens from your `custom_providers` entry) are carried into the subagent.
 
-**Per-child request settings (`request_overrides`):** `delegation.request_overrides` is a dict of request settings sent on every subagent API call. Top-level keys are API kwargs (e.g. `service_tier`); an `extra_body` sub-dict is merged into the request's `extra_body`. It is honored on **all three** resolution branches — direct `base_url`, named `provider`, and pure inherit — so the key always takes effect. Precedence: explicit `request_overrides` values merge **over** any runtime- or parent-derived overrides — top-level explicit keys win, and `extra_body` is deep-merged one level so runtime `extra_body` keys (e.g. a provider's `thinking: {type: disabled}` personality) survive unless your key redefines them. The canonical use case is OpenRouter routing hints for delegation children:
+**Per-child request settings (`request_overrides`):** `delegation.request_overrides` is a dict of request settings sent on every subagent API call. Top-level keys are API kwargs (e.g. `service_tier`); an `extra_body` sub-dict is merged into the request's `extra_body`. It is honored on **all three** resolution branches — direct `base_url`, named `provider`, and pure inherit — so the key always takes effect. Precedence: explicit `request_overrides` values merge **over** any runtime- or parent-derived overrides — top-level explicit keys win, and `extra_body` is deep-merged one level so runtime `extra_body` keys (e.g. a provider's `thinking: {type: disabled}` personality) survive unless your key redefines them. A child's raw `service_tier` / `speed` still lose to a framework source on that child (session pin > per-model overlay > global `agent.service_tier`). The canonical use case is OpenRouter routing hints for delegation children:
 
 ```yaml
 delegation:

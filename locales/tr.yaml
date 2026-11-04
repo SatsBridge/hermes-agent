@@ -195,6 +195,7 @@ gateway:
     choice_auto: "auto — her turun ilk saniyelerinde hızlı"
     choice_cold: "cold — yalnızca oturumun ilk turunda hızlı"
     choice_ultrafast: "ultrafast — OpenAI Ultrafast, 6 kat fiyat"
+    choice_flex: "flex — OpenAI ve Gemini'de daha düşük maliyetli işleme"
     ultrafast_not_supported: "⚡ Ultrafast bu hesapta veya rotada `{model}` için kullanılamıyor."
   footer:
     status: "📎 Çalışma zamanı altbilgisi: **{state}**\nAlanlar: `{fields}`\nPlatform: `{platform}`"
@@ -2716,6 +2717,7 @@ cli:
       feature_anthropic: "Anthropic Fast Mode"
       feature_openai: "Priority Processing"
       feature_ultrafast: "OpenAI Ultrafast"
+      feature_flex: "Flex Processing"
       ultrafast_not_supported: "(._.) Ultrafast bu hesapta veya rotada {model} için kullanılamıyor."
       usage: "Kullanım: /fast [normal|fast|auto|cold|ultrafast|status] [--global]"
       status: "{feature}: {status}"

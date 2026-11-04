@@ -444,14 +444,122 @@ def _mirror_personality(sid, session, agent, arg) -> None:
 
 
 _FAST_TIERS = {"fast": "priority", "on": "priority", "normal": None, "off": None, "auto": "auto", "cold": "cold",
-               "ultrafast": "ultrafast", "ultra": "ultrafast"}
+               "ultrafast": "ultrafast", "ultra": "ultrafast", "flex": "flex"}
 
 
-def _mirror_fast(sid, session, agent, arg) -> None:
+def _mirror_fast(sid, session, agent, arg) -> str | None:
+    tokens = arg.lower().split()
+    from hermes_cli.cli_commands_mixin import _split_scope_flags
+    mode, global_scope = _split_scope_flags(arg)
+    if not tokens or tokens == ["status"]:
+        if session.get("create_service_tier_override") is not None:
+            tier = session["create_service_tier_override"] or None
+        elif agent is not None and getattr(agent, "_service_tier_session_pinned", False):
+            tier = getattr(agent, "service_tier", None)
+        else:
+            cfg = _load_cfg()
+            model = getattr(agent, "model", None) if agent is not None else None
+            fallback = getattr(agent, "service_tier", None) if agent is not None else None
+            if not model:
+                model, _runtime = _resolve_agent_model_runtime(
+                    session.get("model_override"), session.get("provider_override"))
+            from hermes_constants import resolve_service_tier_for_model
+            tier = resolve_service_tier_for_model(cfg.get("agent") or {}, model or "", fallback=fallback)
+        from agent.fast_mode import service_tier_word
+        return f"Fast mode: {service_tier_word(tier)}."
+    if (not tokens or any(token not in (*_FAST_TIERS, "--global", "--session") for token in tokens)
+            or len([token for token in tokens if token not in ("--global", "--session")]) != 1):
+        return None
+    if mode not in _FAST_TIERS:
+        return None
+    tier = _FAST_TIERS[mode]
+    if agent is not None:
+        model = getattr(agent, "model", None)
+        provider = getattr(agent, "provider", None)
+        base_url = getattr(agent, "base_url", None)
+        api_key = getattr(agent, "api_key", None)
+    else:
+        model, runtime = _resolve_agent_model_runtime(
+            session.get("model_override"), session.get("provider_override"))
+        provider, base_url, api_key = (runtime.get(k) for k in ("provider", "base_url", "api_key"))
+    if not model:
+        return "(._.) /fast is not available without a selected model."
+    from agent.fast_mode import STATIC_TIERS
+    resolved = None
+    if tier in STATIC_TIERS:
+        from hermes_cli.models import resolve_service_tier_overrides
+        try:
+            resolved = resolve_service_tier_overrides(model, tier, provider=provider, base_url=base_url)
+            if tier == "ultrafast" and resolved is not None:
+                from agent.codex_service_tiers import ultrafast_offered
+                if not ultrafast_offered(model, provider=provider, base_url=base_url, access_token=api_key):
+                    resolved = None
+        except Exception:
+            logger.debug("fast-tier override resolution failed", exc_info=True)
+            resolved = None
+        if resolved is None:
+            return "(._.) /fast is not available for this model or route/account."
+    elif tier in {"auto", "cold"}:
+        # Bounded modes only operate on a route that supports fast mode; unlike a
+        # static tier they leave per-request tier selection to agent.fast_mode.
+        from hermes_cli.models import resolve_service_tier_overrides
+        try:
+            if resolve_service_tier_overrides(model, "priority", provider=provider, base_url=base_url) is None:
+                return "(._.) /fast is not available for this model or route/account."
+        except Exception:
+            logger.debug("fast-mode route resolution failed", exc_info=True)
+            return "(._.) /fast is not available for this model or route/account."
+
+    saved = False
+    if global_scope:
+        try:
+            _write_config_key("agent.service_tier", "normal" if tier is None else tier)
+            saved = True
+        except Exception:
+            saved = False
+    if global_scope and saved:
+        session["create_service_tier_override"] = None
+    else:
+        session["create_service_tier_override"] = "" if tier is None else tier
     if agent:
-        if arg.lower() in _FAST_TIERS:
-            agent.service_tier = _FAST_TIERS[arg.lower()]
+        overrides = {k: v for k, v in (getattr(agent, "request_overrides", {}) or {}).items()
+                     if k not in ("service_tier", "speed")}
+        agent.service_tier = tier
+        overrides.update(resolved or {})
+        agent.request_overrides = overrides
+        agent._service_tier_session_pinned = not (global_scope and saved)
+        from agent.fast_mode import set_framework_baked_tier_keys
+        set_framework_baked_tier_keys(agent, resolved)
+        _persist_live_session_runtime(session)
         _emit("session.info", sid, _session_info(agent, session))
+    from agent.fast_mode import service_tier_word
+    mode_name = service_tier_word(tier)
+    if global_scope and not saved:
+        return f"Fast mode set to {mode_name} (global save failed; applied to this session only)."
+    return f"Fast mode set to {mode_name}{' globally' if global_scope else ''}."
+
+
+def apply_fast_slash(sid: str, session: dict, arg: str) -> str | None:
+    """Apply valid /fast settings at the live authority before a worker can write config."""
+    tokens = arg.lower().split()
+    from hermes_cli.cli_commands_mixin import _split_scope_flags
+    mode, _global_scope = _split_scope_flags(arg)
+    modes = [token for token in tokens if token not in ("--global", "--session")]
+    if not tokens or tokens == ["status"]:
+        with _session_profile_runtime_scope(session):
+            if _session_uses_compute_host(session) and session.get("_compute_host_active"):
+                command = "/fast status" if tokens else "/fast"
+                return _compute_host_slash(sid, session, "fast", command)[1]
+            result = _mirror_fast(sid, session, session.get("agent"), arg)
+        return result or "Fast mode status is unavailable."
+    if (not tokens or any(token not in (*_FAST_TIERS, "--global", "--session") for token in tokens)
+            or len(modes) != 1 or mode not in _FAST_TIERS):
+        return None
+    with _session_profile_runtime_scope(session):
+        if _session_uses_compute_host(session) and session.get("_compute_host_active"):
+            return _compute_host_slash(sid, session, "fast", f"/fast {arg}")[1]
+        result = _mirror_fast(sid, session, session.get("agent"), arg)
+    return result or "(._.) /fast is not available for this model or route/account."
 
 
 def _mirror_reload_mcp(sid, session, agent, arg) -> None:
@@ -515,7 +623,7 @@ def _compute_host_slash(sid: str, session: dict, name: str, command: str) -> tup
     return "ok", str(ack.get("output") or "")
 
 
-def _mirror_slash_side_effects(sid: str, session: dict, command: str) -> str:
+def _mirror_slash_side_effects(sid: str, session: dict, command: str, output: str | None = None) -> str:
     """Apply side effects that must also hit the gateway's live agent."""
     parts = command.lstrip("/").split(None, 1)
     if not parts:
@@ -523,6 +631,7 @@ def _mirror_slash_side_effects(sid: str, session: dict, command: str) -> str:
     name, arg, agent = parts[0], (parts[1].strip() if len(parts) > 1 else ""), session.get("agent")
     if name == "compact":  # /compact aliases /compress; the compute-host control forwards the raw alias
         name = "compress"
+
     if name in _MUTATES_WHILE_RUNNING:
         if _session_uses_compute_host(session):
             return _compute_host_slash(sid, session, name, command)[1]
@@ -534,7 +643,8 @@ def _mirror_slash_side_effects(sid: str, session: dict, command: str) -> str:
         # Mirrors run OFF-turn (slash.exec RPC pool / compute-host control reader): bind the session's
         # profile scope or /model's credential read raises UnscopedSecretError under multiplex (#122655).
         with _session_profile_runtime_scope(session):
-            return mirror(sid, session, agent, arg) or ""
+            result = mirror(sid, session, agent, arg)
+            return result or ""
     except CompressionBusy as e:  # a turn won the race after the unlocked running check above
         return str(e)
     except Exception as e:

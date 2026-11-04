@@ -195,6 +195,7 @@ gateway:
     choice_auto: "auto — سريع في الثواني الأولى من كل دور"
     choice_cold: "cold — سريع في الدور الأول من الجلسة فقط"
     choice_ultrafast: "ultrafast — ‏OpenAI Ultrafast، السعر ×6"
+    choice_flex: "flex — معالجة أقل تكلفة على ‏OpenAI و‏Gemini"
     ultrafast_not_supported: "⚡ ‏Ultrafast غير متاح لـ `{model}` على هذا الحساب أو المسار."
   footer:
     status: "📎 تذييل التشغيل: **{state}**\nالحقول: `{fields}`\nالمنصّة: `{platform}`"
@@ -2716,6 +2717,7 @@ cli:
       feature_anthropic: "الوضع السريع من Anthropic"
       feature_openai: "المعالجة ذات الأولوية"
       feature_ultrafast: "OpenAI Ultrafast"
+      feature_flex: "Flex Processing"
       ultrafast_not_supported: "(._.) ‏Ultrafast غير متاح لـ {model} على هذا الحساب أو المسار."
       usage: "الاستخدام: /fast [normal|fast|auto|cold|ultrafast|status] [--global]"
       status: "{feature}: {status}"

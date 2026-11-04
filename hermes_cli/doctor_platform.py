@@ -16,6 +16,7 @@ from hermes_cli.doctor_report import (
     warn_on_error,
 )
 from hermes_constants import is_termux as _is_termux
+from hermes_constants import module_python
 
 
 def _python_repair_hint() -> str:
@@ -541,7 +542,7 @@ def _check_web_dashboard_import(should_fix: bool, f: Finding) -> None:
     env = dict(os.environ, HERMES_DISABLE_LAZY_INSTALLS="1")
     try:
         proc = subprocess.run(
-            [sys.executable, "-c", "import hermes_cli.web_server"],
+            [module_python(), "-c", "import hermes_cli.web_server"],
             capture_output=True,
             text=True,
             encoding="utf-8",

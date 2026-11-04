@@ -332,6 +332,9 @@ kanban:
                                    # claims. Fail-closed: an empty list, `null`
                                    # or a bare `dispatch_profiles:` claims
                                    # nothing, and so does an unreadable config.
+  # agent_profile_name: sage        # optional shared-board identity for this home;
+                                   # if profiles/sage is absent, workers run in
+                                   # this home. A real profile dir takes priority.
 ```
 
 Override the config flag at runtime via `HERMES_KANBAN_DISPATCH_IN_GATEWAY=0`
@@ -378,15 +381,19 @@ a gateway-embedded dispatcher AND a standalone daemon against the same
 
 Mounting one `kanban.db` in several Hermes homes (containers, fleet hosts) shares
 the board, but profile names are home-local and every home has a root profile
-named `default` — so `default` collides by construction. The dispatcher's spawn
-gate checks `profile_exists(assignee)` against the *claiming* home, and without
-further configuration every home's dispatcher considers a card assigned to
-`default` claimable, so the wrong home can claim and run it. Either give each
-home unique profile names and never assign cards to `default` on a shared board,
-or set `kanban.dispatch_profiles` per home to declare exactly which assignees
-that home may claim — anything else lands in the dispatcher's
-`skipped_nonspawnable` bucket instead of spawning, and no longer counts as
-spawnable work for the gateway's wake-up probe.
+named `default` — so `default` collides by construction. Set a unique
+`kanban.agent_profile_name` on each home to declare its board identity, and set
+`kanban.dispatch_profiles` to that home's allowed assignees. The identity lets
+the home run its own lane even when `profiles/<identity>` is absent; workers
+stay in the declaring home, while a real profile directory with that name takes
+priority. The allowlist remains authoritative. Without an allowlist, existing
+profiles remain claimable according to the legacy behavior, so the identity
+alone does not provide per-lane isolation. Invalid identities fail closed and
+are logged; they do not affect the dispatcher lock path. Apply the setting to
+all homes sharing a board and restart their gateways together: older gateways
+still use the legacy global lock. Removing the identity and restarting returns
+the home to its ordinary profile-existence gate and the legacy global dispatcher
+lock; no board data is migrated.
 
 ### Idempotent create (for automation / webhooks)
 
@@ -1013,6 +1020,7 @@ All commands are also available as a slash command in the interactive CLI and in
 | `kanban.max_in_progress` | unset (unlimited) | Caps the number of simultaneously running tasks. When the board already has N running, the dispatcher skips spawning more — useful for slow workers (local LLMs, resource-constrained hosts) so they finish what they have before more pile up and time out. Invalid or below-1 values log a warning and behave as unlimited. |
 | `kanban.max_in_progress_per_profile` | unset (unlimited) | Per-profile variant of `max_in_progress` — caps how many tasks any single assignee profile may run concurrently. Useful when one profile is slow or rate-limited but others should keep flowing. Applies alongside the board-wide `max_in_progress`; both must allow a spawn for it to proceed. |
 | `kanban.dispatch_profiles` | unset (any existing profile) | Per-home claim allowlist for boards shared across Hermes homes. When the key is present, this home's dispatcher only claims cards whose assignee is listed — fail-closed: an empty list, `null` or a bare `dispatch_profiles:` claims nothing, and a config read that fails logs a warning and claims nothing; other assignees land in `skipped_nonspawnable`. Only omitting the key means "any existing profile". `hermes kanban diagnostics` prints the resolved value for this home (`any`, the listed names, or `none (fail-closed: …)`). See [Shared boards across homes](#shared-boards-across-homes). |
+| `kanban.agent_profile_name` | unset | Optional validated identity of this home on a shared board. If the matching profile directory is absent, that lane can still be claimed and workers run in the declaring home; an existing profile directory wins. With the key set, gateways use an identity-scoped dispatcher lock; unset keeps the legacy global lock. Pair with `dispatch_profiles` to restrict claims—this key alone does not isolate lanes. |
 | `kanban.auto_promote_children` | `true` | After `decompose_triage_task()` produces children with no parent-blocker dependencies, they're automatically promoted to `ready` so the dispatcher can pick them up. Set to `false` to require manual review — children stay in `todo` until you promote them. |
 | `kanban.default_workdir` | unset | Board-level default working directory applied to new tasks when neither `--workspace` nor the task itself overrides it. Per-task `workspace:` still wins. |
 

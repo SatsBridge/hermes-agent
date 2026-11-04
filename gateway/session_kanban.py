@@ -11,9 +11,29 @@ import sqlite3
 from hermes_state_runtime import RuntimeStoreError
 
 
+def _assignee_home(assignee, owner_home):
+    """The home a card's assignee runs in, resolved as the dispatcher's spawn resolves it: a real
+    profile first, else this owner's own home when the assignee is the ``kanban.agent_profile_name``
+    alias its config declares. Raises ``FileNotFoundError`` for any other missing profile."""
+    from hermes_cli.profiles import normalize_profile_name, resolve_profile_env
+    try:
+        return Path(resolve_profile_env(assignee)).resolve()
+    except FileNotFoundError:
+        from hermes_cli.kanban_db_dispatch import _dispatch_identity
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+        # The alias belongs to the owner's home, which under multiplexing is not the process home.
+        token = set_hermes_home_override(owner_home)
+        try:
+            identity = _dispatch_identity(normalize_profile_name)
+        finally:
+            reset_hermes_home_override(token)
+        if identity is not None and normalize_profile_name(assignee) == identity:
+            return Path(owner_home).resolve()
+        raise
+
+
 def build_kanban_policy(connection, params, config):
     from hermes_cli import kanban_db as kb
-    from hermes_cli.profiles import resolve_profile_env
     from gateway.session_policy import build_policy
     authority, actor = connection.authority, connection.actor
     if not connection.native_owner or 'session:create' not in actor.capabilities:
@@ -35,7 +55,7 @@ def build_kanban_policy(connection, params, config):
                     or task.current_run_id != params['run_id'] or run['task_id'] != task.id
                     or task.claim_lock != params['claim_lock'] or run['claim_lock'] != task.claim_lock):
                 raise RuntimeStoreError('stale_kanban_claim')
-            if Path(resolve_profile_env(task.assignee)).resolve() != Path(authority.profile_id).resolve():
+            if _assignee_home(task.assignee, authority.profile_id) != Path(authority.profile_id).resolve():
                 raise RuntimeStoreError('profile_mismatch')
             bound = conn.execute("SELECT payload FROM task_events WHERE task_id=? AND run_id=? AND kind='owner_admitted' ORDER BY id DESC LIMIT 1",
                                  (task.id, task.current_run_id)).fetchone()

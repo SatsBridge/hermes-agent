@@ -195,6 +195,7 @@ gateway:
     choice_auto: "auto — 每轮的前几秒快速"
     choice_cold: "cold — 仅会话的第一轮快速"
     choice_ultrafast: "ultrafast — OpenAI Ultrafast，6 倍价格"
+    choice_flex: "flex — OpenAI 和 Gemini 上的低成本处理"
     ultrafast_not_supported: "⚡ 此账户或路由无法为 `{model}` 使用 Ultrafast。"
   footer:
     status: "📎 运行时页脚：**{state}**\n字段：`{fields}`\n平台：`{platform}`"
@@ -2716,6 +2717,7 @@ cli:
       feature_anthropic: "Anthropic Fast Mode"
       feature_openai: "Priority Processing"
       feature_ultrafast: "OpenAI Ultrafast"
+      feature_flex: "Flex Processing"
       ultrafast_not_supported: "(._.) 此账户或路由无法为 {model} 使用 Ultrafast。"
       usage: "用法：/fast [normal|fast|auto|cold|ultrafast|status] [--global]"
       status: "{feature}：{status}"
