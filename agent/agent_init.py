@@ -2419,6 +2419,18 @@ def init_agent(
     # reasoning_content echo opt-in; switch_model / fallback / restore keep it in sync.
     agent._reasoning_echo_flag = agent._read_reasoning_echo_from_config()
     agent.request_overrides = dict(request_overrides or {})
+    from agent.fast_mode import parse_service_tier, set_framework_baked_tier_keys
+
+    agent.service_tier = parse_service_tier(getattr(agent, "service_tier", None))
+    # * Surfaces that apply a session /fast set this True after construction. Default-off so
+    # delegated children never inherit a parent session pin.
+    agent._service_tier_session_pinned = False
+    # * Constructor does not write service_tier/speed into request_overrides;
+    # pre-existing keys on that dict stay unmarked raw user overrides.
+    # Surfaces that bake (/fast, gateway merge, TUI set) mark after construction.
+    set_framework_baked_tier_keys(agent, None)
+    # * Batch / background constructors set this True so an enabled config cannot climb.
+    agent._block_service_tier_escalation = False
     agent.prefill_messages = prefill_messages or []  # Prefilled conversation turns
     agent._force_ascii_payload = False
     # Routes that rejected image content / named reasoning keys; build_api_request strips those from wire copies only.
@@ -2446,6 +2458,11 @@ def init_agent(
         _agent_cfg = _load_agent_config()
     except Exception:
         _agent_cfg = {}
+
+    from agent.service_tier_escalation import bind_service_tier_escalation
+
+    _esc_raw = _agent_cfg.get("agent") if isinstance(_agent_cfg, dict) else None
+    bind_service_tier_escalation(agent, _esc_raw)
 
     _apply_display_config(agent, _agent_cfg, platform)
     _init_memory(agent, _agent_cfg, skip_memory, platform, memory_manager=memory_manager)

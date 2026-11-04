@@ -411,6 +411,9 @@ class ComputeHost:
                 "transport": self._transport}
         session = server._sessions[sid]
         session["transport"] = self._transport
+        # Presence distinguishes a known global unpin (None) from legacy/uninitialized metadata.
+        if "service_tier_override" in frame:
+            session["create_service_tier_override"] = frame["service_tier_override"]
         # The host pipe names no login; the record carries the one the gateway stamped at creation.
         session["auth_user_id"] = frame.get("auth_user_id")
         session["profile_home"] = profile_home or session.get("profile_home")
@@ -496,6 +499,8 @@ class ComputeHost:
             with session["history_lock"]:
                 messages = server._history_to_messages(list(session.get("history") or []), profile_home=session.get("profile_home"))
                 ack = {"output": output, **_history_meta(session), "messages": messages}
+            if route_name == "slash.fast" and "create_service_tier_override" in session:
+                ack["service_tier_override"] = session.get("create_service_tier_override")
         ack["session_info"] = server._session_info(session.get("agent"), session)
         return ack
 

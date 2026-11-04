@@ -263,6 +263,7 @@ def _process_single_prompt(
             # even for callers that build a config without it.
             platform=config.get("platform") or "batch",
         )
+        agent._block_service_tier_escalation = True
         try:
             # task_id ensures each task gets its own isolated VM
             result = agent.run_conversation(prompt, task_id=task_id)

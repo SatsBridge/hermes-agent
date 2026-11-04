@@ -1125,7 +1125,7 @@ def test_reclaim_task_resets_running_to_ready(kanban_home, monkeypatch):
     try:
         t = kb.create_task(conn, title="stuck", assignee="broken")
         # Simulate a live claim (not expired).
-        lock = f"{_kb._claimer_id().split(':', 1)[0]}:{secrets.token_hex(8)}"
+        lock = f"{_kb._claimer_id().rsplit(':', 1)[0]}:{secrets.token_hex(8)}"
         future = int(time.time()) + 3600
         killed: list[int] = []
         state = {"alive": True}
@@ -1208,7 +1208,7 @@ def _drive_worker_exit(conn, tid, fake_pid, raw_status):
     """
     import hermes_cli.kanban_db as _kb
     from hermes_cli import kanban_db_dispatch as _kbd
-    host_prefix = _kb._claimer_id().split(":", 1)[0]
+    host_prefix = _kb._claimer_id().rsplit(":", 1)[0]
     claimed = _kb.claim_task(conn, tid, claimer=f"{host_prefix}:mock")
     assert claimed is not None, "task was not claimable for the next attempt"
     _kbd._set_worker_pid(conn, tid, fake_pid)
@@ -1381,7 +1381,7 @@ def test_dead_worker_reap_reads_the_log_of_the_dispatching_board(kanban_home):
         log_path = kb.worker_log_path(tid, board=board)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(_WORKER_LOG_TAIL)
-        host_prefix = kb._claimer_id().split(":", 1)[0]
+        host_prefix = kb._claimer_id().rsplit(":", 1)[0]
         assert kb.claim_task(conn, tid, claimer=f"{host_prefix}:mock") is not None
         kbd._set_worker_pid(conn, tid, 991101)
         kbd._record_worker_exit(991101, 0)

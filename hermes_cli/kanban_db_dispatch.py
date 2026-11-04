@@ -26,6 +26,8 @@ from typing import Mapping
 from typing import Optional
 from typing import TYPE_CHECKING
 
+import hermes_yaml as yaml
+
 from hermes_cli.quiet_single_query import KANBAN_WORKER_EXIT_TRAILER
 
 if TYPE_CHECKING:
@@ -844,15 +846,7 @@ def detect_stale_running(
 
 
 def reconcile_orphaned_running(conn: sqlite3.Connection) -> list[str]:
-    """Requeue ``running`` cards with broken claim bookkeeping; returns their ids.
-
-    A task ``running`` with NULL ``claim_lock``/``claim_expires`` (crash
-    mid-claim, manual SQL, DB restore) is a zombie forever: ``release_stale_claims``
-    needs ``claim_expires``, ``detect_crashed_workers`` needs a host-local lock +
-    pid, ``detect_stale_running`` is off by default. Orphans go back to ``ready``
-    with a comment, leaked run closed, ``reconciled`` event; a row with a live
-    host-local PID is deferred so no duplicate spawns beside it.
-    """
+    """Requeue orphaned running tasks without probing foreign/legacy PIDs."""
     now = int(time.time())
     reconciled: list[str] = []
     rows = conn.execute(
@@ -863,6 +857,9 @@ def reconcile_orphaned_running(conn: sqlite3.Connection) -> list[str]:
     for row in rows:
         tid = row["id"]
         pid = row["worker_pid"]
+        lock = row["claim_lock"] or ""
+        if pid and lock and not lock.startswith(_kb._host_prefix()):  # Foreign/legacy PIDs are not probeable here.
+            continue
         if pid and _worker_alive(pid, _kb._row_get(row, "worker_started_at")):
             # Never requeue beside a live process. Retry next tick.
             _kb._log.debug(
@@ -1149,18 +1146,20 @@ def _reclaim_dead_workers(conn: sqlite3.Connection, board: Optional[str] = None)
     sweep = _CrashSweep()
     with _kb.write_txn(conn):
         rows = conn.execute(
-            "SELECT id, worker_pid, worker_started_at, claim_lock, started_at, assignee "
-            "FROM tasks "
-            "WHERE status = 'running' AND worker_pid IS NOT NULL"
+            "SELECT t.id, t.worker_pid, t.worker_started_at, t.claim_lock, t.started_at, "
+            "       r.started_at AS run_started_at, t.assignee "
+            "FROM tasks t LEFT JOIN task_runs r ON r.id = t.current_run_id "
+            "WHERE t.status = 'running' AND t.worker_pid IS NOT NULL"
         ).fetchall()
         host_prefix = _kb._host_prefix()
         for row in rows:
             lock = row["claim_lock"] or ""
             if not lock.startswith(host_prefix):
                 continue
-            # Launch-window grace so a freshly-spawned worker isn't reclaimed
-            # before its PID is visible on /proc.
-            started_at = _kb._to_epoch(_kb._row_get(row, "started_at"))
+            # Grace uses the active run; tasks.started_at remains first-start metrics.
+            started_at = _kb._to_epoch(_kb._row_get(row, "run_started_at"))
+            if started_at is None:
+                started_at = _kb._to_epoch(_kb._row_get(row, "started_at"))
             if started_at is not None and time.time() - started_at < _kb._resolve_crash_grace_seconds():
                 continue
             if _worker_alive(row["worker_pid"], _kb._row_get(row, "worker_started_at")):
@@ -1661,101 +1660,91 @@ def _is_handoff_event(kind: str, payload: Optional[str]) -> bool:
     return bool(to) and "from" in data and data["from"] != to
 
 
-def _profile_exists_fn() -> Optional[Callable[[str], bool]]:
-    """``hermes_cli.profiles.profile_exists``, or ``None`` when it cannot be
-    imported (local import avoids a cycle; callers fall back to trusting the
-    assignee).
-
-    When ``kanban.dispatch_profiles`` is set (#110995) the returned predicate
-    additionally requires the assignee to be listed, fail-closed — so a card
-    assigned to ``default`` is only claimable by homes that opted into it.
-    Foreign assignees land in the existing ``skipped_nonspawnable`` bucket.
-    """
-    try:
-        from hermes_cli.profiles import normalize_profile_name, profile_exists
-    except Exception:
-        return None
-    allowlist = _dispatch_profile_allowlist(normalize_profile_name)
-    if allowlist is None:
-        return profile_exists
-
-    def _gated(name: str) -> bool:
-        try:
-            canon = normalize_profile_name(name)
-        except ValueError:
-            return False
-        return canon in allowlist and bool(profile_exists(name))
-
-    return _gated
-
-
 def _dispatch_profile_allowlist(normalize_profile_name) -> Optional[frozenset]:
-    """Per-home claim allowlist ``kanban.dispatch_profiles`` (#110995).
-
-    On a shared board (one ``kanban.db`` mounted across several Hermes homes),
-    every home's ``profile_exists`` returns True for ``default`` — the root
-    profile every home has — so a card assigned to ``default`` is claimable by
-    every home's dispatcher. A home opts out of foreign claims by declaring
-    which assignees it may claim::
-
-        kanban:
-          dispatch_profiles: ["sage", "researcher"]   # or "sage,researcher"
-
-    Returns ``None`` only when the key is absent from the user config (upstream
-    behavior: any existing profile is claimable). A present value is
-    fail-closed: an empty list, ``null`` or a bare ``dispatch_profiles:`` claims
-    nothing. The user layer is read without the ``DEFAULT_CONFIG`` merge (whose
-    ``None`` placeholder would make the key look present in every home), and a
-    config read that raises also claims nothing — a corrupt config on a shared
-    board must never widen this home's claim scope silently (#113620).
-    """
+    """None preserves legacy behavior; configured allowlists fail closed."""
     try:
         from hermes_cli.config_effective import load_user_config_effective
         kanban = (load_user_config_effective(fail_closed=True) or {}).get("kanban", {})
-    except Exception as exc:
-        _kb._log.warning(
-            "kanban: could not read kanban.dispatch_profiles (%s: %s) — "
-            "this home claims no cards until the config is readable",
-            type(exc).__name__, exc,
-        )
+    except (OSError, TypeError, ValueError, yaml.YAMLError) as exc:
+        _kb._log.warning("kanban.dispatch_profiles unavailable; this home claims no cards: %s", exc)
         return frozenset()
     if not isinstance(kanban, Mapping) or "dispatch_profiles" not in kanban:
         return None
     raw = kanban["dispatch_profiles"]
     if raw is None or (isinstance(raw, str) and not raw.strip()):
-        _kb._log.warning(
-            "kanban: kanban.dispatch_profiles is present but empty — this home "
-            "claims no cards; omit the key to allow any existing profile"
-        )
+        _kb._log.warning("kanban.dispatch_profiles present but empty; omit the key to allow any")
         return frozenset()
-    names = [str(n) for n in raw] if isinstance(raw, (list, tuple)) else str(raw).split(",")
+    names = raw if isinstance(raw, (list, tuple)) else str(raw).split(",")
     allowed = set()
-    for n in names:
+    for name in names:
         try:
-            allowed.add(normalize_profile_name(n))
+            allowed.add(normalize_profile_name(str(name)))
         except ValueError:
             continue
     return frozenset(allowed)
 
 
-def dispatch_profile_allowlist_summary() -> str:
-    """Human-readable resolution of ``kanban.dispatch_profiles`` for this home.
+def _dispatch_identity(normalize_profile_name) -> Optional[str]:
+    """Return this home's validated Kanban identity, if configured."""
+    try:
+        from hermes_cli.config_effective import load_user_config_effective
+        from hermes_cli.profiles import validate_profile_name
+        kanban = (load_user_config_effective(fail_closed=True) or {}).get("kanban", {})
+    except (OSError, TypeError, ValueError, yaml.YAMLError) as exc:
+        _kb._log.warning("kanban.agent_profile_name unavailable; alias disabled: %s", exc)
+        return None
+    if not isinstance(kanban, Mapping) or kanban.get("agent_profile_name") is None:
+        return None
+    raw = kanban["agent_profile_name"]
+    try:
+        identity = normalize_profile_name(raw)
+        validate_profile_name(identity)
+        return identity
+    except ValueError as exc:
+        _kb._log.warning("kanban.agent_profile_name %r is invalid; alias disabled: %s", raw, exc)
+        return None
 
-    Surfaced by ``hermes kanban diagnostics`` so an operator on a shared board
-    can see what a home believes it may claim (#113620): ``any`` (key absent),
-    the sorted allowed names, or ``none (fail-closed: ...)``.
-    """
+
+def _profile_exists_fn() -> Optional[Callable[[str], bool]]:
+    """Resolve real profiles plus this home's configured identity alias."""
+    try:
+        from hermes_cli.profiles import normalize_profile_name, profile_exists
+    except ImportError:
+        return None
+    identity = _dispatch_identity(normalize_profile_name)
+
+    def _exists(name: str) -> bool:
+        if profile_exists(name):
+            return True
+        try:
+            return identity is not None and normalize_profile_name(name) == identity
+        except ValueError:
+            return False
+    allowlist = _dispatch_profile_allowlist(normalize_profile_name)
+    if allowlist is None:
+        return _exists
+
+    def _gated(name: str) -> bool:
+        try:
+            return normalize_profile_name(name) in allowlist and _exists(name)
+        except ValueError:
+            return False
+
+    return _gated
+
+
+def dispatch_profile_allowlist_summary() -> str:
+    """Describe this home's configured dispatch allowlist for diagnostics."""
     try:
         from hermes_cli.profiles import normalize_profile_name
-    except Exception as exc:
+    except ImportError as exc:
         return f"none (fail-closed: profiles unavailable: {exc})"
     allowlist = _dispatch_profile_allowlist(normalize_profile_name)
     if allowlist is None:
         return "any"
     if allowlist:
         return ", ".join(sorted(allowlist))
-    return ("none (fail-closed: kanban.dispatch_profiles is present but names no valid "
-            "profile, or the config could not be read — omit the key to allow any)")
+    return "none (fail-closed: invalid/empty allowlist or unreadable config; omit the key to allow any)"
 
 
 def _has_spawnable(conn: sqlite3.Connection, status: str) -> bool:
@@ -2737,11 +2726,12 @@ def _retag_legacy_worker_sessions(workspaces_root_path: str) -> None:
         _kb._log.debug("kanban worker: legacy session retag skipped (%s)", exc)
 
 
-def _worker_argv(task: Task, profile_arg: str, hermes_home: Optional[str]) -> list[str]:
-    """Build the ``hermes -p <profile> --cli ... chat -q ...`` worker command."""
-    cmd = [
-        *_resolve_hermes_argv(),
-        "-p", profile_arg,
+def _worker_argv(task: Task, profile_arg: Optional[str], hermes_home: Optional[str]) -> list[str]:
+    """Build a worker command, omitting ``-p`` when its explicit home is authoritative."""
+    cmd = [*_resolve_hermes_argv()]
+    if profile_arg is not None:
+        cmd.extend(["-p", profile_arg])
+    cmd.extend([
         # A worker must NEVER boot the interactive TUI: its no-TTY bail-out
         # exits 0 without doing the task → "protocol violation" every attempt.
         "--cli",
@@ -2749,7 +2739,7 @@ def _worker_argv(task: Task, profile_arg: str, hermes_home: Optional[str]) -> li
         # profile's shell-hook allowlist; pass --accept-hooks explicitly so
         # configured hooks still register.
         "--accept-hooks",
-    ]
+    ])
     # One `--skills X` pair per name: easier to read in `ps` and avoids quoting
     # ambiguity if a skill name contains unusual chars.
     for sk in task.skills or ():
@@ -2839,7 +2829,8 @@ def _default_spawn(task: Task, workspace: str, *, board: Optional[str] = None) -
 
     from hermes_cli.profiles import normalize_profile_name, resolve_profile_env
 
-    profile_arg = normalize_profile_name(task.assignee)
+    assignee_profile = normalize_profile_name(task.assignee)
+    profile_arg = assignee_profile
 
     from agent.secret_scope import is_multiplex_active
     from tools.environments.local import _is_routed_home, build_subprocess_env, strip_launch_profile_env
@@ -2850,6 +2841,13 @@ def _default_spawn(task: Task, workspace: str, *, board: Optional[str] = None) -
         # No profile dir (isolated test fixtures) — the CLI resolves it from
         # HERMES_PROFILE (set below) instead.
         profile_home = None
+        if _dispatch_identity(normalize_profile_name) == assignee_profile:
+            from hermes_constants import get_hermes_home
+
+            profile_home = str(get_hermes_home())
+            # Preserve this home's config even when it is a named profile or
+            # the root has an active_profile selection.
+            profile_arg = None
 
     # Scrub for a ROUTED home, not only under multiplex: the authority test is "does this worker act
     # for another profile", exactly as served_profile_child_env decides it (tools/environments/local.py).
@@ -2924,9 +2922,8 @@ def _default_spawn(task: Task, workspace: str, *, board: Optional[str] = None) -
     # Board slug — defense-in-depth pin if a path is resolved without the
     # DB / workspaces env vars.
     env["HERMES_KANBAN_BOARD"] = _kb._normalize_board_slug(board) or _kb.get_current_board()
-    # kanban_comment reads HERMES_PROFILE for its default author; `-p` alone
-    # doesn't set the env var.
-    env["HERMES_PROFILE"] = profile_arg
+    # Preserve alias identity for kanban comments; -p does not set HERMES_PROFILE.
+    env["HERMES_PROFILE"] = assignee_profile
     # This is the grant boundary: the dispatcher assigned this new worker's task.
     from agent.delegation_context import DELEGATED_CHILD_ENV_MARKER
     env.pop(DELEGATED_CHILD_ENV_MARKER, None)

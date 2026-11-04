@@ -1063,20 +1063,35 @@ def _resolve_review_provider() -> tuple:
     (HTTP 400 "No models provided"). Never raises."""
     rp: dict[str, Any] = {}
     overrides, provider, model_name, binding = {}, None, "", None
+    slot = None
     try:
         from hermes_cli.config import load_config_readonly
+        from hermes_cli.models_service_tiers import apply_aux_service_tier_overrides, bind_aux_slot_service_tier
         from hermes_cli.runtime_provider import resolve_runtime_provider
-        binding = _resolve_review_runtime(load_config_readonly())
+        cfg = load_config_readonly()
+        slot = _subdict(cfg, "auxiliary", "curator")
+        binding = _resolve_review_runtime(cfg)
         model_name = binding.model
         rp = resolve_runtime_provider(
             requested=binding.provider, target_model=binding.model,
             explicit_api_key=binding.explicit_api_key, explicit_base_url=binding.explicit_base_url,
         )
+        rp["_aux_slot"] = slot
         provider = rp.get("provider") or binding.provider
         overrides = _merge_request_overrides(rp.get("request_overrides"), binding.request_overrides.get("extra_body"))
         if isinstance(rp.get("model"), str) and rp["model"].strip():
             model_name = rp["model"].strip()
+        overrides = apply_aux_service_tier_overrides(
+            overrides,
+            slot,
+            model=model_name,
+            provider=provider,
+            base_url=rp.get("base_url") or binding.explicit_base_url,
+            task="curator",
+        )
     except Exception as e:
+        if slot is not None:
+            rp["_aux_slot"] = slot
         logger.warning("curator: auxiliary.curator.provider '%s' (model '%s') could not be resolved: %s — the review "
                        "runs on the main model instead", getattr(binding, "provider", None), model_name, e)
     return rp, model_name, provider, overrides
@@ -1088,6 +1103,7 @@ def _run_llm_review(prompt: str) -> dict[str, Any]:
     result_meta: dict[str, Any] = _llm_meta("")
     try:
         from run_agent import AIAgent
+        from hermes_cli.models_service_tiers import bind_aux_slot_service_tier
     except Exception as e:
         result_meta["error"] = result_meta["summary"] = f"AIAgent import failed: {e}"
         return result_meta
@@ -1118,6 +1134,11 @@ def _run_llm_review(prompt: str) -> dict[str, Any]:
             max_iterations=9999,
             quiet_mode=True, platform="curator", skip_context_files=True, skip_memory=True,
         )
+        # * Slot from the same resolve as request_overrides; bind reads the
+        # constructed agent's own overrides (no second config read).
+        bind_aux_slot_service_tier(review_agent, rp.pop("_aux_slot", None))
+        # * Background curator must not climb the TTFT ladder (batch / /bg parity).
+        review_agent._block_service_tier_escalation = True
         # Disable recursive nudges — the curator must never spawn its own review.
         review_agent._memory_nudge_interval = 0
         review_agent._skill_nudge_interval = 0

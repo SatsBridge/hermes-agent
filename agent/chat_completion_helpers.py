@@ -1541,6 +1541,35 @@ def _build_api_kwargs_for_mode(agent, api_messages: list, tools_for_api: list | 
     return builder(agent, api_messages, tools_for_api, reasoning_config, request_overrides, cache_scope_id)
 
 
+def _apply_effective_overrides_to_summary_kwargs(agent, summary_kwargs: dict) -> None:
+    """Copy main-loop request overrides onto the iteration-limit summary call.
+
+    There is no separate ``auxiliary.summary`` tier. The summary is still
+    part of the same turn, so it must carry the effective ``service_tier``
+    (including a TTFT climb) the conversation loop uses.
+
+    Chat-completions only. ``anthropic_messages`` does not put
+    ``service_tier`` on the wire (main loop maps overrides to ``fast_mode``
+    only); its summary ``_ant_kw`` is built the same way.
+    """
+    try:
+        overrides = effective_request_overrides(agent)
+    except Exception:
+        logger.debug("could not resolve service-tier overrides for summary request", exc_info=True)
+        return
+    if not overrides:
+        return
+    extra_override = overrides.get("extra_body")
+    if isinstance(extra_override, dict):
+        merged = dict(summary_kwargs.get("extra_body") or {})
+        merged.update(extra_override)
+        if merged:
+            summary_kwargs["extra_body"] = merged
+    for key, value in overrides.items():
+        if key != "extra_body":
+            summary_kwargs[key] = value
+
+
 def _model_dump_safe(obj):
     """``model_dump(warnings=False)`` (avoids pydantic serializer UserWarnings on
     generic-union SDK models), falling back for shims that reject the kwarg."""
@@ -2513,7 +2542,11 @@ def _with_stream_emitters(agent, run):
 def _stream_codex_passthrough(agent, api_kwargs: dict, on_first_delta):
     """Codex streams internally via _run_codex_stream (reached through
     _interruptible_api_call); park ``on_first_delta`` on the agent so it can pick
-    it up, and bracket the call with the stream start/end emitters."""
+    it up, and bracket the call with the stream start/end emitters.
+
+    TTFT escalation does not time this path (matching the streaming
+    ``_StreamingCall`` / ``mark_ttft_send`` hook, which is chat-completions only).
+    """
     agent._codex_on_first_delta = on_first_delta
     try:
         return _with_stream_emitters(agent, lambda: agent._interruptible_api_call(api_kwargs))
@@ -2732,6 +2765,14 @@ class _StreamingCall(StreamingWaitMonitor):
         self._writer_token = self._attempt_request_client = self._attempt_stream_response = None
         # The route ``api_kwargs`` was assembled for; a retry must not replay it on another one.
         self._request_route = self._live_route()
+        # Bind TTFT hooks only for an active observation; default-off performs no clock reads.
+        if getattr(agent, "_ttft_obs_stack", None):
+            from agent.service_tier_escalation import mark_ttft_first_delta, mark_ttft_send
+
+            self._mark_ttft_send = mark_ttft_send
+            self._mark_ttft_first_delta = mark_ttft_first_delta
+        else:
+            self._mark_ttft_send = self._mark_ttft_first_delta = None
 
     # ── shared small helpers ────────────────────────────────────────────
 
@@ -2819,6 +2860,12 @@ class _StreamingCall(StreamingWaitMonitor):
         )
 
     def _fire_first_delta(self):
+        mark = self._mark_ttft_first_delta
+        if mark is not None:
+            try:
+                mark(self.agent)
+            except Exception:
+                logger.debug("TTFT first-delta observation failed", exc_info=True)
         if not self.first_delta_fired["done"] and self.on_first_delta:
             self.first_delta_fired["done"] = True
             self._quiet(self.on_first_delta)
@@ -2956,6 +3003,9 @@ class _StreamingCall(StreamingWaitMonitor):
         # #93650: as above — the streaming path carries the same bulk
         # messages/tools payload and pays the same client-side walk.
         stream_kwargs = bypass_chat_sdk_request_transform(stream_kwargs, request_client)
+        if self._mark_ttft_send is not None:
+            with contextlib.suppress(Exception):
+                self._mark_ttft_send(self.agent)
         return request_client.chat.completions.create(**stream_kwargs)
 
     def _chat_stream_created(self, raw_stream: Any) -> None:
@@ -3196,6 +3246,12 @@ class _StreamingCall(StreamingWaitMonitor):
                 _flush_pending_stream_text()
                 for tc_delta in delta_tool_calls:
                     name = tool_calls.feed(tc_delta)
+                    mark = self._mark_ttft_first_delta
+                    if mark is not None:
+                        try:
+                            mark(self.agent)
+                        except Exception:
+                            logger.debug("TTFT tool-delta observation failed", exc_info=True)
                     if name is not None:
                         self._emit_tool_started(name)
                         # Lets the stub-builder warn if streaming dies before the args

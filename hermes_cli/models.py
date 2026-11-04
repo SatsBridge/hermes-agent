@@ -1220,7 +1220,9 @@ def provider_label(provider: Optional[str]) -> str:
 
 def _is_openai_fast_model(model_id: Optional[str]) -> bool:
     """OpenAI flagship eligible for Priority Processing. Codex-series excluded — the Codex Responses
-    API doesn't accept ``service_tier``."""
+    API doesn't accept ``service_tier``. Two-level aggregator ids (``openrouter/openai/gpt-4.1``)
+    deliberately do NOT match: the route gate keeps tier params off aggregator routes anyway, so
+    matching them would only expose a ``/fast`` toggle that confirms and then sends nothing."""
     base = _strip_vendor_prefix(str(model_id or "")).split(":")[0]
     return bool(base) and "codex" not in base and base.startswith(tuple(_OPENAI_FAST_MODE_PREFIXES))
 
@@ -1234,11 +1236,13 @@ def _strip_vendor_prefix(model_id: str) -> str:
 def model_supports_fast_mode(model_id: Optional[str]) -> bool:
     """Return whether Hermes should expose the /fast toggle for this model."""
     from agent.model_metadata import is_grok_46_family
+    from hermes_cli.fast_mode_models import is_google_service_tier_model
 
     return (
         _is_anthropic_fast_model(model_id)
         or _is_openai_fast_model(model_id)
-        or is_grok_46_family(str(model_id or "")))
+        or is_grok_46_family(str(model_id or ""))
+        or is_google_service_tier_model(model_id))
 
 
 def _is_anthropic_fast_model(model_id: Optional[str]) -> bool:
@@ -1249,35 +1253,31 @@ def _is_anthropic_fast_model(model_id: Optional[str]) -> bool:
     return is_anthropic_fast_mode_model(model_id)
 
 
-def _fast_mode_route_supported(
-    model_id: Optional[str], provider: Optional[str], base_url: Optional[str]) -> bool:
-    """Only the first-party endpoint that bills for fast mode may receive its params."""
-    from urllib.parse import urlparse
-
-    from agent.model_metadata import is_grok_46_family
-
-    if _is_anthropic_fast_model(model_id):
-        allowed = {"anthropic": "api.anthropic.com"}
-    elif is_grok_46_family(str(model_id or "")):
-        allowed = {"xai": "api.x.ai"}
-    else:
-        allowed = {
-            "openai": "api.openai.com",
-            "openai-api": "api.openai.com",
-            "openai-codex": "chatgpt.com",
-        }
-    if provider and normalize_provider(provider) not in allowed:
-        return False
-    host = (urlparse(str(base_url or "")).hostname or "").lower()
-    return not host or host in allowed.values()
-
-
 def model_supports_ultrafast(model_id: Optional[str]) -> bool:
     """OpenAI Ultrafast (``service_tier: "ultrafast"``) is published per model, not per family."""
     from agent.model_metadata import strip_codex_context_variant_suffix
 
     base = _strip_vendor_prefix(strip_codex_context_variant_suffix(str(model_id or ""))).split(":")[0]
     return base in _OPENAI_ULTRAFAST_MODELS
+
+
+def _is_openrouter_service_tier_route(provider: Optional[str], base_url: Optional[str]) -> bool:
+    """OpenRouter carries service_tier for any model, independent of its catalog slug."""
+    if provider:
+        normalized = normalize_provider(provider)
+        if normalized == "openrouter":
+            if not base_url:
+                return True
+            from utils import base_url_host_matches
+
+            return base_url_host_matches(base_url, "openrouter.ai")
+        if normalized not in {"auto", "custom"}:
+            return False
+    if not base_url:
+        return False
+    from utils import base_url_host_matches
+
+    return base_url_host_matches(base_url, "openrouter.ai")
 
 
 def resolve_fast_mode_overrides(
@@ -1288,15 +1288,56 @@ def resolve_fast_mode_overrides(
     ``{"service_tier": "priority"}`` (OpenAI / xAI Priority Processing) — or None if unsupported.
     ``tier="ultrafast"`` asks for OpenAI Ultrafast instead: ``{"service_tier": "ultrafast"}`` on an
     Ultrafast model, None elsewhere (never a silent downgrade to a different paid tier).
-    With ``provider``/``base_url`` the route is gated too (``_fast_mode_route_supported``) so proxies
+    ``tier="flex"`` asks for the cheaper Flex tier: ``{"service_tier": "flex"}`` on OpenAI and
+    tier-eligible Gemini models (a top-level ``generateContent`` field there), None on Anthropic
+    (no flex equivalent — ``speed`` is a go-faster knob, so mapping flex onto it would silently
+    bill MORE for a setting chosen to cost less) and on Grok (xAI publishes no flex tier).
+    With ``provider``/``base_url`` the route is gated too (``fast_mode_route_supported``) so proxies
     never see the params. Single fast-mode gate for ``/fast`` and ``agent.fast_mode`` windows."""
-    if not model_supports_fast_mode(model_id):
-        return None
-    if (provider or base_url) and not _fast_mode_route_supported(model_id, provider, base_url):
-        return None
+    openrouter = _is_openrouter_service_tier_route(provider, base_url)
+    if (provider or base_url) and not (openrouter and tier != "ultrafast"):
+        from hermes_cli.fast_mode_models import fast_mode_route_supported
+
+        if not fast_mode_route_supported(model_id, provider, base_url):
+            return None
     if tier == "ultrafast":
         return {"service_tier": "ultrafast"} if model_supports_ultrafast(model_id) else None
+    if openrouter:
+        return {"service_tier": "priority"}
+    if not model_supports_fast_mode(model_id):
+        return None
+    if tier == "flex":
+        from agent.model_metadata import is_grok_46_family
+
+        if _is_anthropic_fast_model(model_id) or is_grok_46_family(str(model_id or "")):
+            return None
+        return {"service_tier": "flex"}
     return {"speed": "fast"} if _is_anthropic_fast_model(model_id) else {"service_tier": "priority"}
+
+
+def resolve_service_tier_overrides(
+    model_id: Optional[str],
+    service_tier: Optional[str],
+    *,
+    provider: Optional[str] = None,
+    base_url: Optional[str] = None,
+) -> dict[str, Any] | None:
+    """Return request overrides for a normalized service-tier preference.
+
+    OpenRouter accepts both ``flex`` and ``priority`` for every catalog model.
+    Elsewhere the existing model-aware mapping remains: OpenAI/Gemini receive
+    ``service_tier`` while supported Anthropic models receive ``speed``.
+    """
+    from hermes_constants import parse_service_tier
+
+    tier = parse_service_tier(service_tier)
+    if tier == "ultrafast":
+        return resolve_fast_mode_overrides(model_id, provider=provider, base_url=base_url, tier=tier)
+    if tier == "flex" and _is_openrouter_service_tier_route(provider, base_url):
+        return {"service_tier": "flex"}
+    if tier in {"priority", "flex"}:
+        return resolve_fast_mode_overrides(model_id, provider=provider, base_url=base_url, tier=tier)
+    return None
 
 
 def _first_exchangeable_copilot_token(raw_tokens) -> str:

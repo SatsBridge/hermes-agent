@@ -66,6 +66,37 @@ class TestHandleFastCommand(unittest.TestCase):
         mock_save.assert_not_called()
         self.assertIsNone(stub.service_tier)
         self.assertIsNone(stub.agent)
+        self.assertTrue(stub._service_tier_session_pinned)
+
+    def test_flex_argument_sets_flex_and_pins(self):
+        cli_mod = _import_cli()
+        stub = self._make_cli(service_tier=None)
+        stub.provider = "openrouter"
+        stub.base_url = "https://openrouter.ai/api/v1"
+        stub.agent = None
+        with (
+            patch.object(cli_mod, "_cprint"),
+            patch.object(cli_mod, "save_config_value") as mock_save,
+        ):
+            cli_mod.HermesCLI._handle_fast_command(stub, "/fast flex")
+        mock_save.assert_not_called()
+        self.assertEqual(stub.service_tier, "flex")
+        self.assertTrue(stub._service_tier_session_pinned)
+
+    def test_flex_argument_selects_flex_for_supported_openai_route(self):
+        cli_mod = _import_cli()
+        stub = self._make_cli(service_tier=None)
+        stub.provider = "openai"
+        stub.base_url = "https://api.openai.com/v1"
+        stub.agent = None
+        with (
+            patch.object(cli_mod, "_cprint"),
+            patch.object(cli_mod, "save_config_value") as mock_save,
+        ):
+            cli_mod.HermesCLI._handle_fast_command(stub, "/fast flex")
+
+        self.assertEqual(stub.service_tier, "flex")
+        mock_save.assert_not_called()
 
 class TestPriorityProcessingModels(unittest.TestCase):
     """Verify the expanded Priority Processing model registry."""
@@ -104,6 +135,9 @@ class TestPriorityProcessingModels(unittest.TestCase):
         assert model_supports_fast_mode("grok-4.5") is False
         assert resolve_fast_mode_overrides("grok-4.6") == {"service_tier": "priority"}
 
+
+
+
 class TestFastModeRouting(unittest.TestCase):
     def test_fast_command_exposed_for_model_even_when_provider_is_auto(self):
         cli_mod = _import_cli()
@@ -133,13 +167,17 @@ class TestFastModeRouting(unittest.TestCase):
         assert route["runtime"]["api_mode"] == "chat_completions"
         # But request_overrides should be set
         assert route["request_overrides"] == {"service_tier": "priority"}
+        assert route["framework_baked_tier_keys"] == {"service_tier": "priority"}
 
-        # Proxied routes (OpenRouter etc.) strip/400 on the param — never sent.
+        # OpenRouter catalog models may carry service_tier.
         stub.base_url = "https://openrouter.ai/api/v1"
         stub.provider = "openrouter"
-        assert cli_mod.HermesCLI._resolve_turn_agent_config(stub, "hi")["request_overrides"] is None
+        assert cli_mod.HermesCLI._resolve_turn_agent_config(stub, "hi")["request_overrides"] == {
+            "service_tier": "priority"
+        }
 
     def test_turn_route_keeps_primary_runtime_when_model_has_no_fast_backend(self):
+        """OpenRouter still injects service_tier for catalog ids that are not first-party fast models."""
         cli_mod = _import_cli()
         stub = SimpleNamespace(
             model="gpt-5.3-codex",
@@ -156,7 +194,8 @@ class TestFastModeRouting(unittest.TestCase):
         route = cli_mod.HermesCLI._resolve_turn_agent_config(stub, "hi")
 
         assert route["runtime"]["provider"] == "openrouter"
-        assert route.get("request_overrides") is None
+        assert route.get("request_overrides") == {"service_tier": "priority"}
+        assert route.get("framework_baked_tier_keys") == {"service_tier": "priority"}
 
 class TestAnthropicFastMode(unittest.TestCase):
     """Verify Anthropic Fast Mode model support and override resolution."""
@@ -234,6 +273,7 @@ class TestAnthropicFastMode(unittest.TestCase):
 
         assert route["runtime"]["provider"] == "anthropic"
         assert route["request_overrides"] == {"speed": "fast"}
+        assert route["framework_baked_tier_keys"] == {"speed": "fast"}
 
 class TestAnthropicFastModeAdapter(unittest.TestCase):
     """Verify build_anthropic_kwargs handles fast_mode parameter."""
@@ -299,3 +339,6 @@ class TestAnthropicFastModeAdapter(unittest.TestCase):
         assert kwargs.get("extra_body", {}).get("speed") is None
         assert "speed" not in kwargs
         assert "extra_headers" not in kwargs
+
+
+

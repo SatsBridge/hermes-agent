@@ -35,7 +35,7 @@ def kanban_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _dead_worker_with_log(conn, tid: str, pid: int, rc: int) -> None:
     """Claim ``tid`` for a worker that already exited ``rc`` and wrote its log — never reaped here."""
-    host = kb._claimer_id().split(":", 1)[0]
+    host = kb._claimer_id().rsplit(":", 1)[0]
     kb.claim_task(conn, tid, claimer=f"{host}:w{pid}")
     conn.execute(
         "UPDATE tasks SET worker_pid=?, worker_started_at=NULL, started_at=? WHERE id=?",

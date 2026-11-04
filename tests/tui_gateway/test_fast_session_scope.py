@@ -20,6 +20,7 @@ Contract under test:
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -148,9 +149,9 @@ class TestSessionInfoFastFollowsTheRoute:
         info = self._info(model="Qwen3.8-27B-UD-Q4_K_M", provider="llamacpp", base_url="http://127.0.0.1:18434/v1")
         assert (info["service_tier"], info["fast"]) == ("priority", False)
 
-    def test_fast_capable_model_behind_a_proxy_reports_no_fast(self) -> None:
+    def test_openrouter_fast_tier_is_available_for_any_catalog_model(self) -> None:
         info = self._info(model="gpt-5.4", provider="openrouter", base_url="https://openrouter.ai/api/v1")
-        assert info["fast"] is False
+        assert info["fast"] is True
 
     def test_pending_switch_is_judged_by_the_new_route(self) -> None:
         """Mid-turn the agent still holds the old base URL; the pending pick decides."""
