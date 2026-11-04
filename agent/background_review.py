@@ -263,7 +263,8 @@ def _resolve_review_runtime(agent: Any, task_cfg: Optional[dict[str, Any]] = Non
         "api_key": parent_runtime.get("api_key") or None, "base_url": parent_runtime.get("base_url") or None,
         "api_mode": "codex_responses" if parent_api_mode == "codex_app_server" else parent_api_mode,
         "credential_pool": getattr(agent, "_credential_pool", None),
-        "request_overrides": strip_inherited_framework_baked_overrides(agent.request_overrides, agent),
+        "request_overrides": strip_inherited_framework_baked_overrides(
+            getattr(agent, "request_overrides", None) or {}, agent),
         "max_tokens": getattr(agent, "max_tokens", None), "command": getattr(agent, "acp_command", None),
         "args": list(getattr(agent, "acp_args", []) or []), "routed": False,
     }

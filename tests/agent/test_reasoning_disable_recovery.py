@@ -114,6 +114,9 @@ class _WireAgent(_Agent):
         self._reasoning_effort_rejected = False
         self._fast_until = 0.0
         self.service_tier = None
+        # Service-tier wire state read by agent.fast_mode.effective_request_overrides.
+        self._framework_baked_tier_keys = None
+        self._service_tier_session_pinned = False
 
     def _vprint(self, line, **kwargs):
         self.notices.append(line)
