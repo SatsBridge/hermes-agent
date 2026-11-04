@@ -876,6 +876,21 @@ def get_managed_system(home: str | Path | None = None) -> str | None:
     return marker
 
 
+def module_python() -> str:
+    """Interpreter for spawning a Hermes module (``python -m hermes_cli...``).
+
+    ``sys.executable`` carries the dependencies in a venv or PM-managed install. The Nix package runs
+    on the bare interpreter (its wrapper adds the dependencies to ``sys.path`` in-process only), so it
+    points ``HERMES_PYTHON`` at an environment that owns them. Elsewhere ``HERMES_PYTHON`` can be PM's
+    store Python, which owns no packages, so it is used only for a NixOS-managed install.
+    """
+    if get_managed_system() == _LEGACY_MANAGED_SYSTEM:
+        candidate = os.environ.get("HERMES_PYTHON", "").strip()
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return sys.executable
+
+
 def _container_or_chmod_skipped() -> bool:
     """Container/chmod-skip detection: the ``HERMES_CONTAINER``/``HERMES_SKIP_CHMOD`` operator
     overrides on top of the canonical :func:`_detect_container` signals (same breadth as

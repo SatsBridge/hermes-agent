@@ -2456,7 +2456,8 @@ def _positive_int(value: Any, default: int, *, minimum: int = 1) -> int:
 def _module_hermes_argv() -> list[str]:
     """Interpreter-bound Hermes CLI invocation (``hermes_cli.main`` is the
     console-script target — there is no top-level ``hermes`` package)."""
-    return [sys.executable, "-m", "hermes_cli.main"]
+    from hermes_constants import module_python
+    return [module_python(), "-m", "hermes_cli.main"]
 
 
 def _absolute_hermes_path(path: str) -> str:
@@ -2685,8 +2686,8 @@ def _retag_legacy_worker_sessions(workspaces_root_path: str) -> None:
 
 def _worker_argv(task: Task, profile_arg: Optional[str], hermes_home: Optional[str]) -> list[str]:
     """The profile owner executes; this subprocess only waits for its receipt."""
-    import sys
-    return [sys.executable, "-m", "hermes_cli.kanban_worker_client"]
+    from hermes_constants import module_python
+    return [module_python(), "-m", "hermes_cli.kanban_worker_client"]
 
 
 def _open_worker_log(task: Task, board: Optional[str]):

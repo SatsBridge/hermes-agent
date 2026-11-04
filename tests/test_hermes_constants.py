@@ -693,3 +693,43 @@ class TestProjectVenvDirOutOfTree:
         assert hermes_constants.project_venv_dir(other) is None
         (checkout / ".venv").mkdir()
         assert hermes_constants.project_venv_dir(checkout) == checkout / ".venv"
+
+
+class TestModulePython:
+    """Hermes module spawns run on the interpreter that owns Hermes' dependencies."""
+
+    @pytest.fixture
+    def env_python(self, tmp_path):
+        python = tmp_path / "env" / "bin" / "python3"
+        python.parent.mkdir(parents=True)
+        python.write_text("#!/bin/sh\n", encoding="utf-8")
+        python.chmod(0o755)
+        return python
+
+    def test_nixos_uses_hermes_python(self, monkeypatch, tmp_path, env_python):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("HERMES_MANAGED", "nixos")
+        monkeypatch.setenv("HERMES_PYTHON", str(env_python))
+        assert hermes_constants.module_python() == str(env_python)
+
+    def test_other_installs_keep_sys_executable(self, monkeypatch, tmp_path, env_python):
+        # On a source install HERMES_PYTHON can be PM's store Python, which owns no packages.
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.delenv("HERMES_MANAGED", raising=False)
+        monkeypatch.setenv("HERMES_PYTHON", str(env_python))
+        assert hermes_constants.module_python() == sys.executable
+
+    def test_nixos_falls_back_when_hermes_python_is_unusable(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("HERMES_MANAGED", "nixos")
+        monkeypatch.setenv("HERMES_PYTHON", str(tmp_path / "missing" / "python3"))
+        assert hermes_constants.module_python() == sys.executable
+
+    def test_kanban_worker_spawns_on_module_python(self, monkeypatch, tmp_path, env_python):
+        from types import SimpleNamespace
+        from hermes_cli.kanban_db_dispatch import _worker_argv
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("HERMES_MANAGED", "nixos")
+        monkeypatch.setenv("HERMES_PYTHON", str(env_python))
+        assert _worker_argv(SimpleNamespace(), "sage", str(tmp_path)) == [
+            str(env_python), "-m", "hermes_cli.kanban_worker_client"]

@@ -53,7 +53,9 @@ class _SlashWorker:
         # ``--provider`` pins the child to the parent agent's virtual provider: without it the
         # worker re-resolves provider from config, so a MoA session (provider=moa, model=<preset>)
         # dispatched its preset NAME to the configured real provider and 402/503'd (#57283).
-        argv = [sys.executable, "-P", "-m", "tui_gateway.slash_worker", "--session-key", session_key] \
+        # Local import: this body is rebound onto server.py's globals (bind_module skips imports).
+        from hermes_constants import module_python
+        argv = [module_python(), "-P", "-m", "tui_gateway.slash_worker", "--session-key", session_key] \
             + (["--model", model] if model else []) \
             + (["--provider", provider] if provider else [])
         self._closed = False
